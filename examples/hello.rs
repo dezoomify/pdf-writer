@@ -1,11 +1,15 @@
 //! This example gives you a first introduction on how to use pdf-writer.
 
+use std::fs::File;
+use std::io::BufWriter;
+
 use pdf_writer::types::{ActionType, AnnotationType, BorderType};
 use pdf_writer::{Content, Finish, Name, Pdf, Rect, Ref, Str, TextStr};
 
 fn main() -> std::io::Result<()> {
     // Start writing.
-    let mut pdf = Pdf::new();
+    let file = File::create("target/hello.pdf")?;
+    let mut pdf = Pdf::new(BufWriter::new(file));
 
     // Define some indirect reference ids we'll use.
     let catalog_id = Ref::new(1);
@@ -77,18 +81,16 @@ fn main() -> std::io::Result<()> {
     // Because we haven't specified any encoding when writing the Type 1 font,
     // the standard encoding is used which happens to work with most ASCII
     // characters.
-    let mut content = Content::new();
+    let mut content = Content::new(Vec::new());
     content.begin_text();
     content.set_font(font_name, 14.0);
     content.next_line(108.0, 734.0);
     content.show(Str(b"Hello World from Rust!"));
     content.end_text();
-    pdf.stream(content_id, &content.finish());
+    pdf.stream(content_id, &content.finish()?);
 
     // Finish writing (this automatically creates the cross-reference table and
-    // file trailer) and retrieve the resulting byte buffer.
-    let buf: Vec<u8> = pdf.finish();
-
-    // Write the thing to a file.
-    std::fs::write("target/hello.pdf", buf)
+    // file trailer) and flush the destination.
+    pdf.finish()?;
+    Ok(())
 }

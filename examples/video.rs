@@ -1,6 +1,9 @@
 //! This example demonstrates how to link/embed videos.
 
 use image::ColorType;
+use std::fs::File;
+use std::io::BufWriter;
+
 use pdf_writer::types::{
     ActionType, AnnotationType, MediaClipType, RenditionOperation, RenditionType,
     TempFileType,
@@ -34,7 +37,8 @@ fn main() -> std::io::Result<()> {
     let embedded = true;
 
     // Start writing.
-    let mut pdf = Pdf::new();
+    let file = File::create("target/video.pdf")?;
+    let mut pdf = Pdf::new(BufWriter::new(file));
 
     // Define some indirect reference ids we'll use.
     let catalog_id = Ref::new(1);
@@ -86,7 +90,7 @@ fn main() -> std::io::Result<()> {
     // remember that the PDF coordinate system starts at the bottom left! When
     // you have other elements after the image, it's also important to save &
     // restore the state so that they are not affected by the transformation.
-    let mut content = Content::new();
+    let mut content = Content::new(Vec::new());
     content.save_state();
     content.transform([
         (bbox.x2 - bbox.x1),
@@ -98,7 +102,7 @@ fn main() -> std::io::Result<()> {
     ]);
     content.x_object(image_name);
     content.restore_state();
-    let content_data = content.finish();
+    let content_data = content.finish()?;
 
     // Create a form XObject with the image for the appearance stream in the
     // screen annotation.
@@ -163,6 +167,7 @@ fn main() -> std::io::Result<()> {
     action.finish();
     annotation.finish();
 
-    // Write the thing to a file.
-    std::fs::write("target/video.pdf", pdf.finish())
+    // Finish the PDF and flush the destination.
+    pdf.finish()?;
+    Ok(())
 }

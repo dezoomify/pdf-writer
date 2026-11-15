@@ -1,11 +1,15 @@
 //! This example shows how to use Separation color spaces.
 
+use std::fs::File;
+use std::io::BufWriter;
+
 use pdf_writer::writers::ColorSpace;
 use pdf_writer::{Content, Finish, Name, Pdf, Rect, Ref};
 
 fn main() -> std::io::Result<()> {
     // Start writing.
-    let mut pdf = Pdf::new();
+    let file = File::create("target/separations.pdf")?;
+    let mut pdf = Pdf::new(BufWriter::new(file));
 
     // Define some indirect reference ids we'll use.
     let catalog_id = Ref::new(1);
@@ -108,7 +112,7 @@ fn main() -> std::io::Result<()> {
 
     // Write the content stream with five stars in different colors, alternating
     // between metallic green and hot pink colors.
-    let mut content = Content::new();
+    let mut content = Content::new(Vec::new());
     // We want a total of five stars.
     let stars = 5;
     // We want to leave a margin of 50 points around the edge of the page.
@@ -172,8 +176,9 @@ fn main() -> std::io::Result<()> {
     }
 
     // Write the content stream.
-    pdf.stream(content_id, &content.finish());
+    pdf.stream(content_id, &content.finish()?);
 
-    // Write the thing to a file.
-    std::fs::write("target/separations.pdf", pdf.finish())
+    // Finish the PDF and flush the destination.
+    pdf.finish()?;
+    Ok(())
 }

@@ -1,11 +1,15 @@
 //! This example shows how to use ICC-based color spaces.
 
+use std::fs::File;
+use std::io::BufWriter;
+
 use pdf_writer::writers::ColorSpace;
 use pdf_writer::{Content, Finish, Name, Pdf, Rect, Ref};
 
 fn main() -> std::io::Result<()> {
     // Start writing.
-    let mut pdf = Pdf::new();
+    let file = File::create("target/icc.pdf")?;
+    let mut pdf = Pdf::new(BufWriter::new(file));
 
     // Define some indirect reference ids we'll use.
     let catalog_id = Ref::new(1);
@@ -48,7 +52,7 @@ fn main() -> std::io::Result<()> {
 
     // Write the content stream with a green rectangle and a crescent with a red
     // stroke.
-    let mut content = Content::new();
+    let mut content = Content::new(Vec::new());
     // We first need to set the color space for the `set_fill_color` / `scn`
     // operator. We'll use the name that we registered in the resource
     // dictionary above.
@@ -79,7 +83,7 @@ fn main() -> std::io::Result<()> {
     content.close_and_stroke();
 
     // Write the content stream.
-    pdf.stream(content_id, &content.finish());
+    pdf.stream(content_id, &content.finish()?);
 
     // Read the ICC profile from a file.
     let icc_data = std::fs::read("examples/sRGB_v4.icc")?;
@@ -103,6 +107,7 @@ fn main() -> std::io::Result<()> {
     icc_profile.range([0.0, 1.0, 0.0, 1.0, 0.0, 1.0]);
     icc_profile.finish();
 
-    // Write the thing to a file.
-    std::fs::write("target/icc.pdf", pdf.finish())
+    // Finish the PDF and flush the destination.
+    pdf.finish()?;
+    Ok(())
 }

@@ -1,29 +1,59 @@
-use crate::{Buf, Chunk, Ref};
+use std::io::{self, Read, Seek, SeekFrom, Write};
 
-/// Renumbers a chunk of objects.
-///
-/// See [`Chunk::renumber`] for more details.
-pub fn renumber(source: &Chunk, target: &mut Chunk, mapping: &mut dyn FnMut(Ref) -> Ref) {
-    target.buf.limits.merge(source.limits());
+use crate::{output::Output, Chunk, Ref};
 
-    let mut iter = source.offsets.iter().copied().peekable();
+/// Renumber a readable chunk into another destination.
+pub fn renumber<R: Write + Read + Seek, W: Write>(
+    source: &mut Chunk<R>,
+    target: &mut Chunk<W>,
+    mapping: &mut dyn FnMut(Ref) -> Ref,
+) -> io::Result<()> {
+    let len = source.len();
+    let offsets = &source.offsets;
+    target.output.limits_mut().merge(source.limits());
+    source
+        .output
+        .read(|reader| renumber_objects(reader, len, offsets, target, mapping))
+}
+
+fn renumber_objects<R: Read + Seek, W: Write>(
+    reader: &mut R,
+    len: u64,
+    offsets: &[(Ref, u64)],
+    target: &mut Chunk<W>,
+    mapping: &mut dyn FnMut(Ref) -> Ref,
+) -> io::Result<()> {
+    let mut scratch = Vec::new();
+    let mut iter = offsets.iter().copied().peekable();
     while let Some((id, offset)) = iter.next() {
+        if target.output.failed() {
+            break;
+        }
         let new = mapping(id);
-        let end = iter.peek().map_or(source.buf.len(), |&(_, offset)| offset);
-        let slice = &source.buf[offset..end];
-        let Some((gen, slice)) = extract_object(slice) else { continue };
-        target.offsets.push((new, target.buf.len()));
-        target.buf.push_int(new.get());
-        target.buf.push(b' ');
-        target.buf.push_int(gen);
-        target.buf.extend(b" obj\n");
-        patch_object(slice, &mut target.buf, mapping);
-        target.buf.extend(b"\nendobj\n");
-
+        let end = iter.peek().map_or(len, |&(_, offset)| offset);
+        let len = usize::try_from(end - offset).map_err(|_| {
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                "chunk object is too large to renumber",
+            )
+        })?;
+        scratch.resize(len, 0);
+        reader.seek(SeekFrom::Start(offset))?;
+        reader.read_exact(&mut scratch)?;
+        let Some((gen, slice)) = extract_object(&scratch) else { continue };
+        target.offsets.push((new, target.len()));
+        let output = target.output.as_output();
+        output.push_int(new.get());
+        output.push(b' ');
+        output.push_int(gen);
+        output.extend(b" obj\n");
+        patch_object(slice, output, mapping);
+        output.extend(b"\nendobj\n");
         if target.settings.pretty {
-            target.buf.extend(b"\n");
+            output.extend(b"\n");
         }
     }
+    Ok(())
 }
 
 /// Extract the generation number and interior of an indirect object.
@@ -49,7 +79,11 @@ fn extract_object(slice: &[u8]) -> Option<(i32, &[u8])> {
 
 /// Processes the interior of an indirect object and patches all indirect
 /// references.
-fn patch_object(slice: &[u8], buf: &mut Buf, mapping: &mut dyn FnMut(Ref) -> Ref) {
+fn patch_object(
+    slice: &[u8],
+    output: &mut dyn Output,
+    mapping: &mut dyn FnMut(Ref) -> Ref,
+) {
     // Find the next point of interest:
     // - 'R' is interesting because it could be an indirect reference
     // - Anything that could contain indirect-reference-like things that are not
@@ -68,12 +102,12 @@ fn patch_object(slice: &[u8], buf: &mut Buf, mapping: &mut dyn FnMut(Ref) -> Ref
             b'R' => {
                 if let Some((head, id, gen)) = validate_ref(&slice[..seen]) {
                     let new = mapping(id);
-                    buf.extend(&slice[written..head]);
-                    buf.push_int(new.get());
-                    buf.push(b' ');
-                    buf.push_int(gen);
-                    buf.push(b' ');
-                    buf.push(b'R');
+                    output.extend(&slice[written..head]);
+                    output.push_int(new.get());
+                    output.push(b' ');
+                    output.push_int(gen);
+                    output.push(b' ');
+                    output.push(b'R');
                     written = seen + 1;
                 }
             }
@@ -118,7 +152,7 @@ fn patch_object(slice: &[u8], buf: &mut Buf, mapping: &mut dyn FnMut(Ref) -> Ref
         seen += 1;
     }
 
-    buf.extend(&slice[written..]);
+    output.extend(&slice[written..]);
 }
 
 /// Validate a match for an indirect reference.
@@ -173,7 +207,7 @@ mod tests {
 
     #[test]
     fn test_renumber() {
-        let mut c = Chunk::new();
+        let mut c = Chunk::new(std::io::Cursor::new(Vec::new()));
 
         c.indirect(Ref::new(4))
             .dict()
@@ -188,10 +222,14 @@ mod tests {
             .pair(Name(b"Unsafe"), TextStr("()(And (More) 17 0 R())"));
 
         // Manually write an untidy object.
-        c.offsets.push((Ref::new(8), c.buf.len()));
-        c.buf.extend(b"8  3  obj\n<</Fmt false/Niceness(4 0\nR-)");
-        c.buf.extend(b"/beginobj/endobj%4 0 R\n");
-        c.buf.extend(b"/Me 8 3  R/Unknown 11 0  R/R[4  0\nR]>>%\n\nendobj");
+        c.offsets.push((Ref::new(8), c.len()));
+        c.output
+            .as_output()
+            .extend(b"8  3  obj\n<</Fmt false/Niceness(4 0\nR-)");
+        c.output.as_output().extend(b"/beginobj/endobj%4 0 R\n");
+        c.output
+            .as_output()
+            .extend(b"/Me 8 3  R/Unknown 11 0  R/R[4  0\nR]>>%\n\nendobj");
 
         c.stream(Ref::new(17), b"1 0 R 2 0 R 3 0 R 4 0 R")
             .pair(Name(b"Ok"), TextStr(")4 0 R"))
@@ -199,7 +237,7 @@ mod tests {
 
         let mut alloc = Ref::new(1);
         let mut map = HashMap::new();
-        let r = c.renumber(|old| {
+        let r = c.renumber(Vec::new(), |old| {
             if old == Ref::new(11) {
                 old
             } else {
@@ -208,7 +246,7 @@ mod tests {
         });
 
         test!(
-            r.buf.as_slice(),
+            r.finish().unwrap(),
             b"1 0 obj",
             b"<<",
             b"  /Nested <<",

@@ -3,80 +3,51 @@ use crate::chunk::Settings;
 use crate::object::{is_delimiter_character, TextStrLike};
 
 /// A builder for a content stream.
-pub struct Content {
-    buf: Buf,
+#[must_use = "call finish to check for I/O errors"]
+pub struct Content<W: Write> {
+    output: Sink<W>,
     settings: Settings,
     q_depth: usize,
 }
 
 /// Core methods.
-impl Content {
-    /// Create a new content stream with the default settings and buffer
-    /// capacity (currently 1 KB).
-    #[allow(clippy::new_without_default)]
-    pub fn new() -> Self {
-        Self::with_settings(Settings::default())
+impl<W: Write> Content<W> {
+    /// Create a content stream writing to the supplied destination.
+    pub fn new(writer: W) -> Self {
+        Self::with_settings(writer, Settings::default())
     }
 
-    /// Create a new content stream with the given settings and the default
-    /// buffer capacity (currently 1 KB).
-    pub fn with_settings(settings: Settings) -> Self {
-        Self::with_settings_and_capacity(settings, 1204)
+    /// Create a content stream with the given formatting settings.
+    pub fn with_settings(writer: W, settings: Settings) -> Self {
+        Self { output: Sink::new(writer), settings, q_depth: 0 }
     }
 
-    /// Create a new content stream with the default settings and the specified
-    /// initial buffer capacity.
-    pub fn with_capacity(capacity: usize) -> Self {
-        Self::with_settings_and_capacity(Settings::default(), capacity)
-    }
-
-    /// Create a new content stream with the given settings and the specified
-    /// initial buffer capacity.
-    pub fn with_settings_and_capacity(settings: Settings, capacity: usize) -> Self {
-        Self {
-            buf: Buf::with_capacity(capacity),
-            settings,
-            q_depth: 0,
-        }
-    }
-
-    /// The number of bytes that were written so far.
+    /// The number of bytes successfully written so far.
     #[inline]
     #[allow(clippy::len_without_is_empty)]
-    pub fn len(&self) -> usize {
-        self.buf.len()
+    pub fn len(&self) -> u64 {
+        self.output.len()
     }
 
-    /// Reserve an additional number of bytes in the buffer.
-    pub fn reserve(&mut self, additional: usize) {
-        self.buf.reserve(additional);
+    /// Get a shared reference to the destination.
+    pub fn get_ref(&self) -> &W {
+        &self.output.writer
     }
 
-    /// The bytes already written so far.
-    pub fn as_bytes(&self) -> &[u8] {
-        self.buf.as_slice()
+    /// Get the limits of data written into the content stream.
+    pub fn limits(&self) -> &Limits {
+        self.output.limits()
     }
 
     /// Start writing an arbitrary operation.
     #[inline]
     pub fn op<'a>(&'a mut self, operator: &'a str) -> Operation<'a> {
-        Operation::start(&mut self.buf, operator, self.settings)
+        Operation::start(self.output.as_output(), operator, self.settings)
     }
 
-    /// Return the buffer of the content stream.
-    ///
-    /// The buffer is essentially a thin wrapper around two objects:
-    /// - A [`Limits`] object, which can optionally be used to keep track of
-    ///   data such as the largest used integer or the longest string used in
-    ///   the content streams, which is useful information for some export
-    ///   modes.
-    /// - The actual underlying data of the content stream, which can be written
-    ///   to a chunk (and optionally apply a filter before doing so).
-    pub fn finish(mut self) -> Buf {
-        if self.buf.last() == Some(&b'\n') {
-            self.buf.inner.pop();
-        }
-        self.buf
+    /// Check for serialization errors, flush, and return the destination.
+    pub fn finish(self) -> io::Result<W> {
+        self.output.finish()
     }
 }
 
@@ -84,7 +55,7 @@ impl Content {
 ///
 /// This struct is created by [`Content::op`].
 pub struct Operation<'a> {
-    buf: &'a mut Buf,
+    output: &'a mut dyn Output,
     op: &'a str,
     first: bool,
     settings: Settings,
@@ -92,8 +63,12 @@ pub struct Operation<'a> {
 
 impl<'a> Operation<'a> {
     #[inline]
-    pub(crate) fn start(buf: &'a mut Buf, op: &'a str, settings: Settings) -> Self {
-        Self { buf, op, first: true, settings }
+    pub(crate) fn start(
+        output: &'a mut dyn Output,
+        op: &'a str,
+        settings: Settings,
+    ) -> Self {
+        Self { output, op, first: true, settings }
     }
 
     /// Write a primitive operand.
@@ -128,8 +103,8 @@ impl<'a> Operation<'a> {
         // pretty-writing is enabled, and only lazily add padding depending on
         // whether it's really necessary if not.
         let needs_padding = if self.settings.pretty {
-            if !self.buf.is_empty() {
-                self.buf.push(pad_byte);
+            if !self.output.is_empty() {
+                self.output.push(pad_byte);
             }
 
             false
@@ -138,7 +113,7 @@ impl<'a> Operation<'a> {
         };
 
         self.first = false;
-        Obj::direct(self.buf, 0, self.settings, needs_padding)
+        Obj::direct(self.output, 0, self.settings, needs_padding)
     }
 }
 
@@ -150,18 +125,18 @@ impl Drop for Operation<'_> {
         // For example, in case we previously wrote a BT operator and then a
         // `[]` operand in the next operation, we don't need to pad them.
         if (self.settings.pretty
-            || self.buf.last().is_some_and(|b| !is_delimiter_character(*b)))
-            && !self.buf.is_empty()
+            || self.output.last().is_some_and(|b| !is_delimiter_character(b)))
+            && !self.output.is_empty()
         {
-            self.buf.push(pad_byte);
+            self.output.push(pad_byte);
         }
 
-        self.buf.extend(self.op.as_bytes());
+        self.output.extend(self.op.as_bytes());
     }
 }
 
 /// General graphics state.
-impl Content {
+impl<W: Write> Content<W> {
     /// `w`: Set the stroke line width.
     ///
     /// Panics if `width` is negative.
@@ -308,7 +283,7 @@ impl RenderingIntent {
 }
 
 /// Special graphics state.
-impl Content {
+impl<W: Write> Content<W> {
     /// `q`: Save the graphics state on the stack.
     #[inline]
     pub fn save_state(&mut self) -> &mut Self {
@@ -341,7 +316,7 @@ impl Content {
 }
 
 /// Path construction.
-impl Content {
+impl<W: Write> Content<W> {
     /// `m`: Begin a new subpath at (x, y).
     #[inline]
     pub fn move_to(&mut self, x: f32, y: f32) -> &mut Self {
@@ -404,7 +379,7 @@ impl Content {
 }
 
 /// Path painting.
-impl Content {
+impl<W: Write> Content<W> {
     /// `S`: Stroke the current path.
     #[inline]
     pub fn stroke(&mut self) -> &mut Self {
@@ -475,7 +450,7 @@ impl Content {
 }
 
 /// Clipping paths.
-impl Content {
+impl<W: Write> Content<W> {
     /// `W`: Intersect the current clipping path with the current path using the
     /// nonzero winding number rule.
     #[inline]
@@ -494,7 +469,7 @@ impl Content {
 }
 
 /// Text objects.
-impl Content {
+impl<W: Write> Content<W> {
     /// `BT`: Begin a text object.
     #[inline]
     pub fn begin_text(&mut self) -> &mut Self {
@@ -511,7 +486,7 @@ impl Content {
 }
 
 /// Text state.
-impl Content {
+impl<W: Write> Content<W> {
     /// `Tc`: Set the character spacing.
     #[inline]
     pub fn set_char_spacing(&mut self, spacing: f32) -> &mut Self {
@@ -604,7 +579,7 @@ impl TextRenderingMode {
 }
 
 /// Text positioning.
-impl Content {
+impl<W: Write> Content<W> {
     /// `Td`: Move to the start of the next line.
     #[inline]
     pub fn next_line(&mut self, x: f32, y: f32) -> &mut Self {
@@ -637,7 +612,7 @@ impl Content {
 }
 
 /// Text showing.
-impl Content {
+impl<W: Write> Content<W> {
     /// `Tj`: Show text.
     ///
     /// The encoding of the text depends on the font.
@@ -735,7 +710,7 @@ deref!('a, PositionedItems<'a> => Array<'a>, array);
 ///
 /// These operators are only allowed in
 /// [Type 3 CharProcs](crate::font::Type3Font::char_procs).
-impl Content {
+impl<W: Write> Content<W> {
     /// `d0`: Starts a Type 3 glyph that contains color information.
     /// - `wx` defines the glyph's width
     /// - `wy` is set to 0.0 automatically
@@ -765,7 +740,7 @@ impl Content {
 }
 
 /// Color.
-impl Content {
+impl<W: Write> Content<W> {
     /// `CS`: Set the stroke color space to the parameter. PDF 1.1+.
     ///
     /// The parameter must be the name of a parameter-less color space or of a
@@ -946,7 +921,7 @@ impl<'a> From<Name<'a>> for ColorSpaceOperand<'a> {
 }
 
 /// Shading patterns.
-impl Content {
+impl<W: Write> Content<W> {
     /// `sh`: Fill the whole drawing area with the specified shading.
     #[inline]
     pub fn shading(&mut self, shading: Name) -> &mut Self {
@@ -958,7 +933,7 @@ impl Content {
 // TODO: Inline images. Also check clause 6.1.10 of PDF/A-2 spec.
 
 /// XObjects.
-impl Content {
+impl<W: Write> Content<W> {
     /// `Do`: Write an external object.
     #[inline]
     pub fn x_object(&mut self, name: Name) -> &mut Self {
@@ -968,7 +943,7 @@ impl Content {
 }
 
 /// Marked Content.
-impl Content {
+impl<W: Write> Content<W> {
     /// `MP`: Write a marked-content point. PDF 1.2+.
     #[inline]
     pub fn marked_content_point(&mut self, tag: Name) -> &mut Self {
@@ -1215,7 +1190,7 @@ impl ArtifactAttachment {
 }
 
 /// Compatibility.
-impl Content {
+impl<W: Write> Content<W> {
     /// `BX`: Begin a compatibility section.
     #[inline]
     pub fn begin_compat(&mut self) -> &mut Self {
@@ -1731,7 +1706,7 @@ mod tests {
 
     #[test]
     fn test_content_encoding() {
-        let mut content = Content::new();
+        let mut content = Content::new(Vec::new());
         content
             .save_state()
             .rect(1.0, 2.0, 3.0, 4.0)
@@ -1742,14 +1717,14 @@ mod tests {
             .restore_state();
 
         assert_eq!(
-            content.finish().into_vec(),
+            content.finish().unwrap(),
             b"q\n1 2 3 4 re\nf\n[7 2] 4 d\n/MyImage Do\n2 3.5 /MyPattern scn\nQ"
         );
     }
 
     #[test]
     fn test_content_text() {
-        let mut content = Content::new();
+        let mut content = Content::new(Vec::new());
 
         content.set_font(Name(b"F1"), 12.0);
         content.begin_text();
@@ -1763,14 +1738,14 @@ mod tests {
         content.end_text();
 
         assert_eq!(
-            content.finish().into_vec(),
+            content.finish().unwrap(),
             b"/F1 12 Tf\nBT\n[] TJ\n[(AB) 2 (CD)] TJ\nET"
         );
     }
 
     #[test]
     fn test_content_array_no_pretty() {
-        let mut content = Content::with_settings(Settings { pretty: false });
+        let mut content = Content::with_settings(Vec::new(), Settings { pretty: false });
 
         content.set_font(Name(b"F1"), 12.0);
         content.set_font(Name(b"F2"), 15.0);
@@ -1787,14 +1762,14 @@ mod tests {
         content.end_text();
 
         assert_eq!(
-            content.finish().into_vec(),
+            content.finish().unwrap(),
             b"/F1 12 Tf/F2 15 Tf\nBT[]TJ[(AB)2(CD)4(EF)]TJ\nET"
         );
     }
 
     #[test]
     fn test_content_dict_no_pretty() {
-        let mut content = Content::with_settings(Settings { pretty: false });
+        let mut content = Content::with_settings(Vec::new(), Settings { pretty: false });
 
         let mut mc = content.begin_marked_content_with_properties(Name(b"Test"));
         let mut properties = mc.properties();
@@ -1803,7 +1778,7 @@ mod tests {
         mc.finish();
 
         assert_eq!(
-            content.finish().into_vec(),
+            content.finish().unwrap(),
             b"/Test<</ActualText(Actual)/MCID 1/Type/Background>>BDC"
         );
     }

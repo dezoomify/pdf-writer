@@ -1,3 +1,5 @@
+use std::io::{Read, Seek};
+
 use super::*;
 
 /// Settings that should be applied while writing a PDF file.
@@ -20,179 +22,170 @@ impl Default for Settings {
     }
 }
 
-/// A builder for a collection of indirect PDF objects.
+/// A writer for a collection of indirect PDF objects.
 ///
-/// This type holds written top-level indirect PDF objects. Typically, you won't
-/// create a colllection yourself, but use the primary chunk of the top-level
-/// [`Pdf`] through its [`Deref`] implementation.
+/// The destination is supplied by the caller. Use a separate chunk when objects
+/// need to be written while another writer borrows the main PDF. To append or
+/// renumber a chunk, its destination must also implement [`Read`] and [`Seek`],
+/// for example a [`std::io::Cursor<Vec<u8>>`] or a readable file.
 ///
-/// However, sometimes it's useful to be able to create a separate chunk to be
-/// able to write two things at the same time (which isn't possible with a
-/// single chunk because of the streaming nature --- only one writer can borrow
-/// it at a time).
-#[derive(Clone)]
-pub struct Chunk {
-    pub(crate) buf: Buf,
-    pub(crate) offsets: Vec<(Ref, usize)>,
+/// Always call [`finish`](Self::finish), or append the chunk to a PDF, to check
+/// for I/O errors. Destinations must be empty and positioned at their beginning.
+#[must_use = "finish the chunk or append it to a PDF to check for I/O errors"]
+pub struct Chunk<W: Write> {
+    pub(crate) output: Sink<W>,
+    pub(crate) offsets: Vec<(Ref, u64)>,
     pub(crate) settings: Settings,
 }
 
-impl Chunk {
-    /// Create a new chunk with the default settings and buffer capacity
-    /// (currently 1 KB).
-    #[allow(clippy::new_without_default)]
-    pub fn new() -> Self {
-        Self::with_settings(Settings::default())
+impl<W: Write> Chunk<W> {
+    /// Create a chunk writing to `writer` with the default settings.
+    pub fn new(writer: W) -> Self {
+        Self::with_settings(writer, Settings::default())
     }
 
-    /// Create a new chunk with the given settings and the default buffer
-    /// capacity (currently 1 KB).
-    pub fn with_settings(settings: Settings) -> Self {
-        Self::with_settings_and_capacity(settings, 1204)
-    }
-
-    /// Create a new chunk with the default settings and the specified initial
-    /// capacity.
-    pub fn with_capacity(capacity: usize) -> Self {
-        Self::with_settings_and_capacity(Settings::default(), capacity)
-    }
-
-    /// Create a new chunk with the given settings and the specified initial
-    /// buffer capacity.
-    pub fn with_settings_and_capacity(settings: Settings, capacity: usize) -> Self {
+    /// Create a chunk writing to `writer` with the given settings.
+    pub fn with_settings(writer: W, settings: Settings) -> Self {
         Self {
-            buf: Buf::with_capacity(capacity),
+            output: Sink::new(writer),
             offsets: vec![],
             settings,
         }
     }
 
-    /// The number of bytes that were written so far.
+    /// The number of bytes successfully written so far.
     #[inline]
     #[allow(clippy::len_without_is_empty)]
-    pub fn len(&self) -> usize {
-        self.buf.len()
+    pub fn len(&self) -> u64 {
+        self.output.len()
     }
 
-    /// Reserve an additional number of bytes in the buffer.
-    pub fn reserve(&mut self, additional: usize) {
-        self.buf.reserve(additional);
+    /// Get a shared reference to the destination.
+    pub fn get_ref(&self) -> &W {
+        &self.output.writer
     }
 
-    /// The bytes already written so far.
-    pub fn as_bytes(&self) -> &[u8] {
-        self.buf.as_slice()
+    /// Check for serialization errors, flush, and return the destination.
+    pub fn finish(self) -> io::Result<W> {
+        self.output.finish()
     }
 
-    /// Add all objects from another chunk to this one.
-    pub fn extend(&mut self, other: &Chunk) {
+    /// Append all objects from another chunk.
+    ///
+    /// The source is flushed and read from its beginning. Its position is
+    /// restored so writing to it can continue. Source and destination errors
+    /// are reported by this chunk's [`finish`](Self::finish).
+    pub fn extend<R: Write + Read + Seek>(&mut self, other: &mut Chunk<R>) {
+        if self.output.failed() {
+            return;
+        }
         let base = self.len();
-        self.buf.extend_buf(&other.buf);
+        let len = other.len();
+        let result = other.output.read(|reader| {
+            reader.rewind()?;
+            let copied = io::copy(&mut reader.take(len), &mut self.output)?;
+            if copied != len {
+                return Err(io::Error::new(
+                    io::ErrorKind::UnexpectedEof,
+                    "chunk destination was truncated",
+                ));
+            }
+            Ok(())
+        });
+        if let Err(error) = result {
+            self.output.fail(error);
+            return;
+        }
+        self.output.limits_mut().merge(other.limits());
         self.offsets
             .extend(other.offsets.iter().map(|&(id, offset)| (id, base + offset)));
     }
 
-    /// An iterator over the references of the top-level objects
-    /// of the chunk, in the order they appear in the chunk.
+    /// Iterate over the top-level object references, in serialization order.
     pub fn refs(&self) -> impl ExactSizeIterator<Item = Ref> + '_ {
         self.offsets.iter().map(|&(id, _)| id)
     }
 
-    /// Returns the limits of data written into the chunk.
+    /// Get the limits of data written into the chunk.
     pub fn limits(&self) -> &Limits {
-        self.buf.limits()
+        self.output.limits()
     }
 
-    /// Merges other limits into this chunk, taking the maximum of each field
-    /// from the chunk's current [`limits()`](Self::limits) and `other`.
-    ///
-    /// This is, for instance, useful when adding a content stream (with limits
-    /// of its own) to the chunk.
+    /// Merge limits from separately generated content into this chunk.
     ///
     /// ```
     /// use pdf_writer::{Chunk, Content, Ref};
-    ///
-    /// let mut content = Content::new();
+    /// let mut content = Content::new(Vec::new());
     /// content.set_dash_pattern([1.0, 3.0, 2.0, 4.0, 5.0], 1.0);
-    /// let buf = content.finish();
-    ///
-    /// let mut chunk = Chunk::new();
-    /// chunk.stream(Ref::new(1), &buf);
-    /// chunk.merge_limits(buf.limits());
-    ///
-    /// // Dash pattern had an array with 5 entries.
+    /// let limits = content.limits().clone();
+    /// let bytes = content.finish()?;
+    /// let mut chunk = Chunk::new(Vec::new());
+    /// chunk.stream(Ref::new(1), &bytes);
+    /// chunk.merge_limits(&limits);
     /// assert_eq!(chunk.limits().array_len(), 5);
+    /// # chunk.finish()?;
+    /// # Ok::<_, std::io::Error>(())
     /// ```
     pub fn merge_limits(&mut self, other: &Limits) {
-        self.buf.limits.merge(other);
+        self.output.limits_mut().merge(other);
     }
+}
 
-    /// Renumbers the IDs of indirect objects and all indirect references in the
-    /// chunk and returns the resulting chunk.
+impl<R: Write + Read + Seek> Chunk<R> {
+    /// Renumber objects and references into a new caller-supplied destination.
     ///
-    /// The given closure is called for each object and indirect reference in
-    /// the chunk. When an ID appears multiple times in the chunk (for object
-    /// and/or reference), it will be called multiple times. When assigning new
-    /// IDs, it is up to you to provide a well-defined mapping (it should most
-    /// probably be a pure function so that a specific old ID is always mapped
-    /// to the same new ID).
-    ///
-    /// A simple way to renumber a chunk is to map all old IDs to new
-    /// consecutive IDs. This can be achieved by allocating a new ID for each
-    /// unique ID we have seen and memoizing this mapping in a hash map:
+    /// `mapping` is called for every occurrence of an ID, including references
+    /// to objects outside this chunk. It must return a consistent mapping.
+    /// Strings and stream payloads are copied without interpreting their bytes.
+    /// Source and destination errors are reported by the returned chunk's finish.
     ///
     /// ```
-    /// # use std::collections::HashMap;
-    /// # use pdf_writer::{Chunk, Ref, TextStr, Name};
-    /// let mut chunk = Chunk::new();
+    /// use std::{collections::HashMap, io::Cursor};
+    /// use pdf_writer::{Chunk, Ref};
+    /// let mut chunk = Chunk::new(Cursor::new(Vec::new()));
     /// chunk.indirect(Ref::new(10)).primitive(true);
-    /// chunk.indirect(Ref::new(17))
-    ///     .dict()
-    ///     .pair(Name(b"Self"), Ref::new(17))
-    ///     .pair(Name(b"Ref"), Ref::new(10))
-    ///     .pair(Name(b"NoRef"), TextStr("Text with 10 0 R"));
-    ///
-    /// // Gives the objects consecutive IDs.
-    /// // - The `true` object will get ID 1.
-    /// // - The dictionary object will get ID 2.
     /// let mut alloc = Ref::new(1);
     /// let mut map = HashMap::new();
-    /// let renumbered = chunk.renumber(|old| {
+    /// let renumbered = chunk.renumber(Vec::new(), |old| {
     ///     *map.entry(old).or_insert_with(|| alloc.bump())
     /// });
+    /// let bytes = renumbered.finish()?;
+    /// # Ok::<_, std::io::Error>(())
     /// ```
-    ///
-    /// If a chunk references indirect objects that are not defined within it,
-    /// the closure is still called with those references. Allocating new IDs
-    /// for them will probably not make sense, so it's up to you to either not
-    /// have dangling references or handle them in a way that makes sense for
-    /// your use case.
-    pub fn renumber<F>(&self, mapping: F) -> Chunk
-    where
-        F: FnMut(Ref) -> Ref,
-    {
-        let mut chunk = Chunk::with_capacity(self.len());
+    pub fn renumber<W: Write>(
+        &mut self,
+        writer: W,
+        mapping: impl FnMut(Ref) -> Ref,
+    ) -> Chunk<W> {
+        let mut chunk = Chunk::with_settings(writer, self.settings);
         self.renumber_into(&mut chunk, mapping);
         chunk
     }
 
-    /// Same as [`renumber`](Self::renumber), but writes the results into an
-    /// existing `target` chunk instead of creating a new chunk.
-    pub fn renumber_into<F>(&self, target: &mut Chunk, mut mapping: F)
-    where
-        F: FnMut(Ref) -> Ref,
-    {
-        target.buf.reserve(self.len());
-        crate::renumber::renumber(self, target, &mut mapping);
+    /// Renumber into an existing target chunk.
+    ///
+    /// Errors are reported by the target chunk's finish. The source's position
+    /// is restored so that writing to it can continue.
+    pub fn renumber_into<W: Write>(
+        &mut self,
+        target: &mut Chunk<W>,
+        mut mapping: impl FnMut(Ref) -> Ref,
+    ) {
+        if target.output.failed() {
+            return;
+        }
+        if let Err(error) = crate::renumber::renumber(self, target, &mut mapping) {
+            target.output.fail(error);
+        }
     }
 }
 
 /// Indirect objects and streams.
-impl Chunk {
+impl<W: Write> Chunk<W> {
     /// Start writing an indirectly referenceable object.
     pub fn indirect(&mut self, id: Ref) -> Obj<'_> {
-        self.offsets.push((id, self.buf.len()));
-        Obj::indirect(&mut self.buf, id, self.settings)
+        self.offsets.push((id, self.output.len()));
+        Obj::indirect(self.output.as_output(), id, self.settings)
     }
 
     /// Start writing an indirectly referenceable stream.
@@ -207,13 +200,13 @@ impl Chunk {
     /// use pdf_writer::{Pdf, Content, Ref};
     ///
     /// // Create a simple content stream.
-    /// let mut content = Content::new();
+    /// let mut content = Content::new(Vec::new());
     /// content.rect(50.0, 50.0, 50.0, 50.0);
     /// content.stroke();
     ///
     /// // Create a writer and write the stream.
-    /// let mut pdf = Pdf::new();
-    /// pdf.stream(Ref::new(1), &content.finish());
+    /// let mut pdf = Pdf::new(Vec::new());
+    /// pdf.stream(Ref::new(1), &content.finish().unwrap());
     /// ```
     ///
     /// This crate does not do any compression for you. If you want to compress
@@ -227,17 +220,17 @@ impl Chunk {
     /// use miniz_oxide::deflate::{compress_to_vec_zlib, CompressionLevel};
     ///
     /// // Create a simple content stream.
-    /// let mut content = Content::new();
+    /// let mut content = Content::new(Vec::new());
     /// content.rect(50.0, 50.0, 50.0, 50.0);
     /// content.stroke();
     ///
     /// // Compress the stream.
     /// let level = CompressionLevel::DefaultLevel as u8;
-    /// let compressed = compress_to_vec_zlib(&content.finish(), level);
+    /// let compressed = compress_to_vec_zlib(&content.finish().unwrap(), level);
     ///
     /// // Create a writer, write the compressed stream and specify that it
     /// // needs to be decoded with a FLATE filter.
-    /// let mut pdf = Pdf::new();
+    /// let mut pdf = Pdf::new(Vec::new());
     /// pdf.stream(Ref::new(1), &compressed).filter(Filter::FlateDecode);
     /// ```
     /// For all the specialized stream functions below, it works the same way:
@@ -250,7 +243,7 @@ impl Chunk {
 }
 
 /// Document structure.
-impl Chunk {
+impl<W: Write> Chunk<W> {
     /// Start writing a page tree.
     pub fn pages(&mut self, id: Ref) -> Pages<'_> {
         self.indirect(id).start()
@@ -308,7 +301,7 @@ impl Chunk {
 }
 
 /// Graphics and content.
-impl Chunk {
+impl<W: Write> Chunk<W> {
     /// Start writing an image XObject stream.
     ///
     /// The samples should be encoded according to the stream's filter, color
@@ -341,7 +334,7 @@ impl Chunk {
 }
 
 /// Fonts.
-impl Chunk {
+impl<W: Write> Chunk<W> {
     /// Start writing a Type-1 font.
     pub fn type1_font(&mut self, id: Ref) -> Type1Font<'_> {
         self.indirect(id).start()
@@ -377,7 +370,7 @@ impl Chunk {
 }
 
 /// Color spaces, shadings and patterns.
-impl Chunk {
+impl<W: Write> Chunk<W> {
     /// Start writing a color space.
     pub fn color_space(&mut self, id: Ref) -> ColorSpace<'_> {
         self.indirect(id).start()
@@ -425,7 +418,7 @@ impl Chunk {
 }
 
 /// Functions.
-impl Chunk {
+impl<W: Write> Chunk<W> {
     /// Start writing a sampled function stream.
     pub fn sampled_function<'a>(
         &'a mut self,
@@ -458,7 +451,7 @@ impl Chunk {
 }
 
 /// Tree data structures.
-impl Chunk {
+impl<W: Write> Chunk<W> {
     /// Start writing a name tree node.
     pub fn name_tree<T: Primitive>(&mut self, id: Ref) -> NameTree<'_, T> {
         self.indirect(id).start()
@@ -471,7 +464,7 @@ impl Chunk {
 }
 
 /// Interactive features.
-impl Chunk {
+impl<W: Write> Chunk<W> {
     /// Start writing an annotation dictionary.
     pub fn annotation(&mut self, id: Ref) -> Annotation<'_> {
         self.indirect(id).start()
@@ -493,7 +486,7 @@ impl Chunk {
     }
 }
 
-impl Debug for Chunk {
+impl<W: Write> Debug for Chunk<W> {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         f.pad("Chunk(..)")
     }
@@ -505,15 +498,15 @@ mod tests {
 
     #[test]
     fn test_chunk() {
-        let mut w = Pdf::new();
+        let mut w = Pdf::new(Vec::new());
         let mut font = w.type3_font(Ref::new(1));
-        let mut c = Chunk::new();
+        let mut c = Chunk::new(std::io::Cursor::new(Vec::new()));
         c.font_descriptor(Ref::new(2)).name(Name(b"MyFont"));
         font.font_descriptor(Ref::new(2));
         font.finish();
-        w.extend(&c);
+        w.extend(&mut c);
         test!(
-            w.finish(),
+            w.finish().unwrap(),
             b"%PDF-1.7\n%\x80\x80\x80\x80\n",
             b"1 0 obj",
             b"<<\n  /Type /Font\n  /Subtype /Type3\n  /FontDescriptor 2 0 R\n>>",

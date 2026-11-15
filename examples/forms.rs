@@ -1,12 +1,16 @@
 //! This example shows how to create forms accepted by the most popular readers.
 
+use std::fs::File;
+use std::io::BufWriter;
+
 use pdf_writer::types::{
     ActionType, AnnotationFlags, BorderType, FieldFlags, FieldType, FormActionFlags,
 };
 use pdf_writer::{Content, Finish, Name, Pdf, Rect, Ref, Str, TextStr};
 
 fn main() -> std::io::Result<()> {
-    let mut pdf = Pdf::new();
+    let file = File::create("target/forms.pdf")?;
+    let mut pdf = Pdf::new(BufWriter::new(file));
 
     // Let's set up our primary font, we'll have to reference it a few times.
     let text_font_id = Ref::new(1);
@@ -115,7 +119,7 @@ fn main() -> std::io::Result<()> {
 
     // Here we prepare our appearances, the on appearance is a tick and the off
     // appearance is empty.
-    let mut content = Content::new();
+    let mut content = Content::new(Vec::new());
     content.save_state();
     content.begin_text();
     content.set_fill_gray(0.0);
@@ -125,7 +129,7 @@ fn main() -> std::io::Result<()> {
     content.end_text();
     content.restore_state();
 
-    let on_stream = content.finish();
+    let on_stream = content.finish()?;
     let mut on_appearance = pdf.form_xobject(radio_on_appearance_id, &on_stream);
 
     on_appearance.bbox(bbox);
@@ -140,8 +144,7 @@ fn main() -> std::io::Result<()> {
     on_appearance.finish();
 
     // Our off appearance is empty, we haven't ticked the box.
-    pdf.form_xobject(radio_off_appearance_id, &Content::new().finish())
-        .bbox(bbox);
+    pdf.form_xobject(radio_off_appearance_id, &[]).bbox(bbox);
 
     // Now we'll write a widget annotation for each button.
     for (id, rect, state) in radios {
@@ -277,5 +280,6 @@ fn main() -> std::io::Result<()> {
     pdf.type1_font(symbol_font_id).base_font(Name(b"ZapfDingbats"));
     pdf.pages(page_tree_id).kids([page_id]).count(1);
 
-    std::fs::write("target/forms.pdf", pdf.finish())
+    pdf.finish()?;
+    Ok(())
 }

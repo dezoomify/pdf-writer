@@ -2,22 +2,21 @@
 
 use pdf_writer::{Chunk, Content, Limits, Name, Ref};
 
-fn main() {
+fn main() -> std::io::Result<()> {
     let mut limits = Limits::new();
 
-    let mut content = Content::new();
+    let mut content = Content::new(Vec::new());
     content.transform([-3.4, 0.0, 0.0, 3.1, 100.0, 100.0]);
     content.line_to(15.0, -26.1);
-    let buf = content.finish();
-
     // This will have the limits:
     // - Max real number: 26.1 (for negative values we use their absolute value)
     // - Max int number 100 (even though above 100.0 is a float number, it will be coerced into an
     //   integer, and thus counts towards the int limit)
-    limits.merge(buf.limits());
+    limits.merge(content.limits());
+    let buf = content.finish()?;
 
-    let mut chunk = Chunk::new();
-    chunk.stream(Ref::new(1), &buf.into_vec());
+    let mut chunk = Chunk::new(Vec::new());
+    chunk.stream(Ref::new(1), &buf);
     chunk.type3_font(Ref::new(2)).name(Name(b"A_long_font_name"));
 
     // This will update the limit for the maximum name and dictionary length.
@@ -28,4 +27,6 @@ fn main() {
     assert_eq!(limits.real(), 26.1);
     assert_eq!(limits.name_len(), 16);
     assert_eq!(limits.dict_entries(), 3);
+    chunk.finish()?;
+    Ok(())
 }

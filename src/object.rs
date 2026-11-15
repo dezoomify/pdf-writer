@@ -1,4 +1,5 @@
 use std::convert::TryFrom;
+use std::fmt::Write as _;
 use std::marker::PhantomData;
 use std::mem::ManuallyDrop;
 use std::num::NonZeroI32;
@@ -8,14 +9,14 @@ use crate::chunk::Settings;
 use crate::object::sealed::Sealed;
 
 mod sealed {
-    use crate::Buf;
+    use crate::output::Output;
 
     pub trait Sealed {
         /// Whether the primitive object starts with one of the PDF delimiter characters.
         const STARTS_WITH_DELIMITER: bool;
 
-        /// Write the object into a buffer.
-        fn write(self, buf: &mut Buf);
+        /// Serialize the object to the destination.
+        fn write(self, output: &mut dyn Output);
     }
 }
 
@@ -29,8 +30,8 @@ where
     const STARTS_WITH_DELIMITER: bool = T::STARTS_WITH_DELIMITER;
 
     #[inline]
-    fn write(self, buf: &mut Buf) {
-        (*self).write(buf);
+    fn write(self, output: &mut dyn Output) {
+        (*self).write(output);
     }
 }
 
@@ -40,11 +41,11 @@ impl Sealed for bool {
     const STARTS_WITH_DELIMITER: bool = false;
 
     #[inline]
-    fn write(self, buf: &mut Buf) {
+    fn write(self, output: &mut dyn Output) {
         if self {
-            buf.extend(b"true");
+            output.extend(b"true");
         } else {
-            buf.extend(b"false");
+            output.extend(b"false");
         }
     }
 }
@@ -55,8 +56,8 @@ impl Sealed for i32 {
     const STARTS_WITH_DELIMITER: bool = false;
 
     #[inline]
-    fn write(self, buf: &mut Buf) {
-        buf.push_int(self);
+    fn write(self, output: &mut dyn Output) {
+        output.push_int(self);
     }
 }
 
@@ -66,8 +67,8 @@ impl Sealed for f32 {
     const STARTS_WITH_DELIMITER: bool = false;
 
     #[inline]
-    fn write(self, buf: &mut Buf) {
-        buf.push_float(self);
+    fn write(self, output: &mut dyn Output) {
+        output.push_float(self);
     }
 }
 
@@ -98,8 +99,8 @@ impl Str<'_> {
 impl Sealed for Str<'_> {
     const STARTS_WITH_DELIMITER: bool = true;
 
-    fn write(self, buf: &mut Buf) {
-        buf.limits.register_str_len(self.0.len());
+    fn write(self, output: &mut dyn Output) {
+        output.limits_mut().register_str_len(self.0.len());
 
         // We use:
         // - Literal strings for ASCII with nice escape sequences to make it
@@ -107,8 +108,7 @@ impl Sealed for Str<'_> {
         //   parentheses because they are delimiters.
         // - Hex strings for anything non-ASCII.
         if self.0.iter().all(|b| b.is_ascii()) {
-            buf.reserve(self.0.len());
-            buf.inner.push(b'(');
+            output.push(b'(');
 
             let mut balanced = None;
             for &byte in self.0 {
@@ -117,34 +117,33 @@ impl Sealed for Str<'_> {
                         if !*balanced
                             .get_or_insert_with(|| byte != b')' && self.is_balanced())
                         {
-                            buf.push(b'\\');
+                            output.push(b'\\');
                         }
-                        buf.push(byte);
+                        output.push(byte);
                     }
-                    b'\\' => buf.extend(br"\\"),
-                    b' '..=b'~' => buf.push(byte),
-                    b'\n' => buf.extend(br"\n"),
-                    b'\r' => buf.extend(br"\r"),
-                    b'\t' => buf.extend(br"\t"),
-                    b'\x08' => buf.extend(br"\b"),
-                    b'\x0c' => buf.extend(br"\f"),
+                    b'\\' => output.extend(br"\\"),
+                    b' '..=b'~' => output.push(byte),
+                    b'\n' => output.extend(br"\n"),
+                    b'\r' => output.extend(br"\r"),
+                    b'\t' => output.extend(br"\t"),
+                    b'\x08' => output.extend(br"\b"),
+                    b'\x0c' => output.extend(br"\f"),
                     _ => {
-                        buf.push(b'\\');
-                        buf.push_octal(byte);
+                        output.push(b'\\');
+                        output.push_octal(byte);
                     }
                 }
             }
 
-            buf.push(b')');
+            output.push(b')');
         } else {
-            buf.reserve(2 + 2 * self.0.len());
-            buf.push(b'<');
+            output.push(b'<');
 
             for &byte in self.0 {
-                buf.push_hex(byte);
+                output.push_hex(byte);
             }
 
-            buf.push(b'>');
+            output.push(b'>');
         }
     }
 }
@@ -166,19 +165,18 @@ pub struct TextStr<'a>(pub &'a str);
 impl Sealed for TextStr<'_> {
     const STARTS_WITH_DELIMITER: bool = true;
 
-    fn write(self, buf: &mut Buf) {
-        buf.limits.register_str_len(self.0.len());
+    fn write(self, output: &mut dyn Output) {
+        output.limits_mut().register_str_len(self.0.len());
 
         // ASCII and PDFDocEncoding match for 32 up to 126.
         if self.0.bytes().all(|b| matches!(b, 32..=126)) {
-            Str(self.0.as_bytes()).write(buf);
+            Str(self.0.as_bytes()).write(output);
         } else {
-            buf.reserve(6 + 4 * self.0.len());
-            write_utf16be_text_str_header(buf);
+            write_utf16be_text_str_header(output);
             for value in self.0.encode_utf16() {
-                buf.push_hex_u16(value);
+                output.push_hex_u16(value);
             }
-            write_utf16be_text_str_footer(buf);
+            write_utf16be_text_str_footer(output);
         }
     }
 }
@@ -255,64 +253,58 @@ pub struct TextStrWithLang<'a, 'b>(pub &'b [(LanguageIdentifier, &'a str)]);
 impl<'a, 'b> Sealed for TextStrWithLang<'a, 'b> {
     const STARTS_WITH_DELIMITER: bool = true;
 
-    fn write(self, buf: &mut Buf) {
+    fn write(self, output: &mut dyn Output) {
         let mut len = 0;
-        let mut buf_len = 6;
 
         for (lang, text) in self.0 {
             // Each language tag is enclosed in two escape characters, plus the
             // two-letter language code and optional two-letter region code.
             len += text.len() + lang.len() + 2;
-            // Each hexadecimal character is four bytes long, plus four bytes
-            // for the escape sequence. The language tag is encoded in
-            // hexadecimal, so each byte becomes two hexadecimal characters.
-            buf_len += 4 * text.len() + lang.len() * 2 + 4;
         }
 
-        buf.limits.register_str_len(len);
+        output.limits_mut().register_str_len(len);
 
         // Escape sequences for languages may only appear in Unicode-encoded
         // text strings, see clause 7.9.2.2 of ISO 32000-1:2008.
-        buf.reserve(buf_len);
-        write_utf16be_text_str_header(buf);
+        write_utf16be_text_str_header(output);
 
         for (lang, text) in self.0 {
-            write_utf16be_lang_code(*lang, buf);
+            write_utf16be_lang_code(*lang, output);
             for value in text.encode_utf16() {
-                buf.push_hex_u16(value);
+                output.push_hex_u16(value);
             }
         }
 
-        write_utf16be_text_str_footer(buf);
+        write_utf16be_text_str_footer(output);
     }
 }
 
 impl Primitive for TextStrWithLang<'_, '_> {}
 
-fn write_utf16be_text_str_header(buf: &mut Buf) {
-    buf.push(b'<');
-    buf.push_hex(254);
-    buf.push_hex(255);
+fn write_utf16be_text_str_header(output: &mut dyn Output) {
+    output.push(b'<');
+    output.push_hex(254);
+    output.push_hex(255);
 }
 
-fn write_utf16be_text_str_footer(buf: &mut Buf) {
-    buf.push(b'>');
+fn write_utf16be_text_str_footer(output: &mut dyn Output) {
+    output.push(b'>');
 }
 
-fn write_utf16be_lang_code(lang: LanguageIdentifier, buf: &mut Buf) {
+fn write_utf16be_lang_code(lang: LanguageIdentifier, output: &mut dyn Output) {
     // The escape character U+001B encloses the language tag. It must not
     // otherwise appear in a text string and the spec offers no opportunity to
     // escape it. In the future, `pdf-writer` may offer a constructor for
     // [`TextStrWithLang`] and [`TextStr`] that either checks for it or replaces
     // it with the object replacement character U+FFFD.
-    buf.push_hex_u16(0x001B);
-    buf.push_hex_u16(u16::from(lang.lang[0]));
-    buf.push_hex_u16(u16::from(lang.lang[1]));
+    output.push_hex_u16(0x001B);
+    output.push_hex_u16(u16::from(lang.lang[0]));
+    output.push_hex_u16(u16::from(lang.lang[1]));
     if let Some(region) = lang.region {
-        buf.push_hex_u16(u16::from(region[0]));
-        buf.push_hex_u16(u16::from(region[1]));
+        output.push_hex_u16(u16::from(region[0]));
+        output.push_hex_u16(u16::from(region[1]));
     }
-    buf.push_hex_u16(0x001B);
+    output.push_hex_u16(0x001B);
 }
 
 /// A trait for types that can be used everywhere a text string is expected.
@@ -335,20 +327,19 @@ pub struct Name<'a>(pub &'a [u8]);
 impl Sealed for Name<'_> {
     const STARTS_WITH_DELIMITER: bool = true;
 
-    fn write(self, buf: &mut Buf) {
-        buf.limits.register_name_len(self.0.len());
+    fn write(self, output: &mut dyn Output) {
+        output.limits_mut().register_name_len(self.0.len());
 
-        buf.reserve(1 + self.0.len());
-        buf.push(b'/');
+        output.push(b'/');
         for &byte in self.0 {
             // - Number sign shall use hexadecimal escape
             // - Regular characters within the range exlacamation mark .. tilde
             //   can be written directly
             if byte != b'#' && matches!(byte, b'!'..=b'~') && is_regular_character(byte) {
-                buf.push(byte);
+                output.push(byte);
             } else {
-                buf.push(b'#');
-                buf.push_hex(byte);
+                output.push(b'#');
+                output.push_hex(byte);
             }
         }
     }
@@ -392,8 +383,8 @@ impl Sealed for Null {
     const STARTS_WITH_DELIMITER: bool = false;
 
     #[inline]
-    fn write(self, buf: &mut Buf) {
-        buf.extend(b"null");
+    fn write(self, output: &mut dyn Output) {
+        output.extend(b"null");
     }
 }
 
@@ -445,9 +436,9 @@ impl Sealed for Ref {
     const STARTS_WITH_DELIMITER: bool = false;
 
     #[inline]
-    fn write(self, buf: &mut Buf) {
-        buf.push_int(self.0.get());
-        buf.extend(b" 0 R");
+    fn write(self, output: &mut dyn Output) {
+        output.push_int(self.0.get());
+        output.extend(b" 0 R");
     }
 }
 
@@ -485,18 +476,18 @@ impl Sealed for Rect {
     const STARTS_WITH_DELIMITER: bool = true;
 
     #[inline]
-    fn write(self, buf: &mut Buf) {
-        buf.push(b'[');
-        buf.push_val(self.x1);
-        buf.push(b' ');
-        buf.push_val(self.y1);
-        buf.push(b' ');
-        buf.push_val(self.x2);
-        buf.push(b' ');
-        buf.push_val(self.y2);
-        buf.push(b']');
+    fn write(self, output: &mut dyn Output) {
+        output.push(b'[');
+        output.push_val(self.x1);
+        output.push(b' ');
+        output.push_val(self.y1);
+        output.push(b' ');
+        output.push_val(self.x2);
+        output.push(b' ');
+        output.push_val(self.y2);
+        output.push(b']');
 
-        buf.limits.register_array_len(4);
+        output.limits_mut().register_array_len(4);
     }
 }
 
@@ -603,31 +594,27 @@ impl Date {
 impl Sealed for Date {
     const STARTS_WITH_DELIMITER: bool = true;
 
-    fn write(self, buf: &mut Buf) {
-        buf.extend(b"(D:");
+    fn write(self, output: &mut dyn Output) {
+        output.extend(b"(D:");
 
         (|| {
-            write!(buf.inner, "{:04}", self.year).unwrap();
-            write!(buf.inner, "{:02}", self.month?).unwrap();
-            write!(buf.inner, "{:02}", self.day?).unwrap();
-            write!(buf.inner, "{:02}", self.hour?).unwrap();
-            write!(buf.inner, "{:02}", self.minute?).unwrap();
-            write!(buf.inner, "{:02}", self.second?).unwrap();
+            write!(output, "{:04}", self.year).unwrap();
+            write!(output, "{:02}", self.month?).unwrap();
+            write!(output, "{:02}", self.day?).unwrap();
+            write!(output, "{:02}", self.hour?).unwrap();
+            write!(output, "{:02}", self.minute?).unwrap();
+            write!(output, "{:02}", self.second?).unwrap();
             let utc_offset_hour = self.utc_offset_hour?;
             if utc_offset_hour == 0 && self.utc_offset_minute == 0 {
-                buf.push(b'Z');
+                output.push(b'Z');
             } else {
-                write!(
-                    buf.inner,
-                    "{:+03}'{:02}",
-                    utc_offset_hour, self.utc_offset_minute
-                )
-                .unwrap();
+                write!(output, "{:+03}'{:02}", utc_offset_hour, self.utc_offset_minute)
+                    .unwrap();
             }
             Some(())
         })();
 
-        buf.push(b')');
+        output.push(b')');
     }
 }
 
@@ -636,7 +623,7 @@ impl Primitive for Date {}
 /// Writer for an arbitrary object.
 #[must_use = "not consuming this leaves the writer in an inconsistent state"]
 pub struct Obj<'a> {
-    buf: &'a mut Buf,
+    output: &'a mut dyn Output,
     indirect: bool,
     indent: u8,
     settings: Settings,
@@ -647,13 +634,13 @@ impl<'a> Obj<'a> {
     /// Start a new direct object.
     #[inline]
     pub(crate) fn direct(
-        buf: &'a mut Buf,
+        output: &'a mut dyn Output,
         indent: u8,
         settings: Settings,
         needs_padding: bool,
     ) -> Self {
         Self {
-            buf,
+            output,
             indirect: false,
             indent,
             settings,
@@ -663,11 +650,15 @@ impl<'a> Obj<'a> {
 
     /// Start a new indirect object.
     #[inline]
-    pub(crate) fn indirect(buf: &'a mut Buf, id: Ref, settings: Settings) -> Self {
-        buf.push_int(id.get());
-        buf.extend(b" 0 obj\n");
+    pub(crate) fn indirect(
+        output: &'a mut dyn Output,
+        id: Ref,
+        settings: Settings,
+    ) -> Self {
+        output.push_int(id.get());
+        output.extend(b" 0 obj\n");
         Self {
-            buf,
+            output,
             indirect: true,
             indent: 0,
             settings,
@@ -691,20 +682,19 @@ impl<'a> Obj<'a> {
         // the current token starts with one, we don't need to add a whitespace
         // for padding.
 
-        let ends_with_delimiter =
-            self.buf.last().copied().is_some_and(is_delimiter_character);
+        let ends_with_delimiter = self.output.last().is_some_and(is_delimiter_character);
 
         if self.needs_padding && !T::STARTS_WITH_DELIMITER && !ends_with_delimiter {
-            self.buf.extend(b" ");
+            self.output.extend(b" ");
         }
 
-        value.write(self.buf);
+        value.write(self.output);
 
         if self.indirect {
-            self.buf.extend(b"\nendobj\n");
+            self.output.extend(b"\nendobj\n");
 
             if self.settings.pretty {
-                self.buf.extend(b"\n");
+                self.output.extend(b"\n");
             }
         }
     }
@@ -731,7 +721,7 @@ impl<'a> Obj<'a> {
     /// ```
     /// use pdf_writer::{Pdf, Ref, Name, writers::Type1Font};
     ///
-    /// let mut pdf = Pdf::new();
+    /// let mut pdf = Pdf::new(Vec::new());
     /// pdf.page(Ref::new(1))
     ///     .resources()
     ///     .fonts()
@@ -763,7 +753,7 @@ pub trait Rewrite<'a> {
 
 /// Writer for an array.
 pub struct Array<'a> {
-    buf: &'a mut Buf,
+    output: &'a mut dyn Output,
     indirect: bool,
     indent: u8,
     settings: Settings,
@@ -771,9 +761,9 @@ pub struct Array<'a> {
 }
 
 writer!(Array: |obj| {
-    obj.buf.push(b'[');
+    obj.output.push(b'[');
     Self {
-        buf: obj.buf,
+        output: obj.output,
         indirect: obj.indirect,
         indent: obj.indent,
         settings: obj.settings,
@@ -799,7 +789,7 @@ impl<'a> Array<'a> {
     pub fn push(&mut self) -> Obj<'_> {
         let needs_padding = if self.len != 0 {
             if self.settings.pretty {
-                self.buf.push(b' ');
+                self.output.push(b' ');
                 false
             } else {
                 true
@@ -810,7 +800,7 @@ impl<'a> Array<'a> {
 
         self.len += 1;
 
-        Obj::direct(self.buf, self.indent, self.settings, needs_padding)
+        Obj::direct(self.output, self.indent, self.settings, needs_padding)
     }
 
     /// Write an item with a primitive value.
@@ -844,13 +834,13 @@ impl<'a> Array<'a> {
 impl Drop for Array<'_> {
     #[inline]
     fn drop(&mut self) {
-        self.buf.limits.register_array_len(self.len() as usize);
-        self.buf.push(b']');
+        self.output.limits_mut().register_array_len(self.len as usize);
+        self.output.push(b']');
         if self.indirect {
-            self.buf.extend(b"\nendobj\n");
+            self.output.extend(b"\nendobj\n");
 
             if self.settings.pretty {
-                self.buf.extend(b"\n");
+                self.output.extend(b"\n");
             }
         }
     }
@@ -925,7 +915,7 @@ impl<'a, T> TypedArray<'a, T> {
 
 /// Writer for a dictionary.
 pub struct Dict<'a> {
-    buf: &'a mut Buf,
+    output: &'a mut dyn Output,
     indirect: bool,
     indent: u8,
     settings: Settings,
@@ -933,9 +923,9 @@ pub struct Dict<'a> {
 }
 
 writer!(Dict: |obj| {
-    obj.buf.extend(b"<<");
+    obj.output.extend(b"<<");
     Self {
-        buf: obj.buf,
+        output: obj.output,
         indirect: obj.indirect,
         indent: obj.indent.saturating_add(2),
         settings: obj.settings,
@@ -964,23 +954,23 @@ impl<'a> Dict<'a> {
         // Keys always start with a delimiter since they are names, so we never need
         // padding unless `pretty` is activated.
         if self.settings.pretty {
-            self.buf.push(b'\n');
+            self.output.push(b'\n');
 
             for _ in 0..self.indent {
-                self.buf.push(b' ');
+                self.output.push(b' ');
             }
         }
 
-        self.buf.push_val(key);
+        self.output.push_val(key);
 
         let needs_padding = if self.settings.pretty {
-            self.buf.push(b' ');
+            self.output.push(b' ');
             false
         } else {
             true
         };
 
-        Obj::direct(self.buf, self.indent, self.settings, needs_padding)
+        Obj::direct(self.output, self.indent, self.settings, needs_padding)
     }
 
     /// Write a pair with a primitive value.
@@ -1013,22 +1003,22 @@ impl<'a> Dict<'a> {
 impl Drop for Dict<'_> {
     #[inline]
     fn drop(&mut self) {
-        self.buf.limits.register_dict_entries(self.len as usize);
+        self.output.limits_mut().register_dict_entries(self.len as usize);
 
         if self.len != 0 && self.settings.pretty {
-            self.buf.push(b'\n');
+            self.output.push(b'\n');
             for _ in 0..self.indent - 2 {
-                self.buf.push(b' ');
+                self.output.push(b' ');
             }
         }
 
-        self.buf.extend(b">>");
+        self.output.extend(b">>");
 
         if self.indirect {
-            self.buf.extend(b"\nendobj\n");
+            self.output.extend(b"\nendobj\n");
 
             if self.settings.pretty {
-                self.buf.extend(b"\n");
+                self.output.extend(b"\n");
             }
         }
     }
@@ -1148,23 +1138,20 @@ impl<'a> Stream<'a> {
 impl Drop for Stream<'_> {
     fn drop(&mut self) {
         let dict_len = self.dict.len as usize;
-        self.dict.buf.limits.register_dict_entries(dict_len);
-
-        const TAIL_LEN: usize = b"\n>>\nstream\n\nendstream\nendobj\n\n".len();
-        self.dict.buf.reserve(self.data.len() + TAIL_LEN);
+        self.dict.output.limits_mut().register_dict_entries(dict_len);
 
         if self.dict.settings.pretty {
-            self.dict.buf.extend(b"\n");
+            self.dict.output.extend(b"\n");
         }
 
-        self.dict.buf.extend(b">>");
-        self.dict.buf.extend(b"\nstream\n");
-        self.dict.buf.extend(self.data.as_ref());
-        self.dict.buf.extend(b"\nendstream");
-        self.dict.buf.extend(b"\nendobj\n");
+        self.dict.output.extend(b">>");
+        self.dict.output.extend(b"\nstream\n");
+        self.dict.output.extend(self.data.as_ref());
+        self.dict.output.extend(b"\nendstream");
+        self.dict.output.extend(b"\nendobj\n");
 
         if self.dict.settings.pretty {
-            self.dict.buf.extend(b"\n");
+            self.dict.output.extend(b"\n");
         }
     }
 }
@@ -1595,7 +1582,7 @@ where
 ///
 /// ```
 /// # use pdf_writer::{Pdf, Ref, Finish, Name, Str};
-/// # let mut pdf = Pdf::new();
+/// # let mut pdf = Pdf::new(Vec::new());
 /// let mut array = pdf.indirect(Ref::new(1)).array();
 /// array.push().dict().pair(Name(b"Key"), Str(b"Value"));
 /// array.item(2);
@@ -1701,10 +1688,10 @@ mod tests {
 
     #[test]
     fn test_streams() {
-        let mut w = Pdf::new();
+        let mut w = Pdf::new(Vec::new());
         w.stream(Ref::new(1), &b"Hi there!"[..]).filter(Filter::Crypt);
         test!(
-            w.finish(),
+            w.finish().unwrap(),
             b"%PDF-1.7\n%\x80\x80\x80\x80\n",
             b"1 0 obj",
             b"<<\n  /Length 9\n  /Filter /Crypt\n>>",
@@ -1720,14 +1707,6 @@ mod tests {
             b"<<\n  /Size 2\n>>",
             b"startxref\n94\n%%EOF",
         )
-    }
-
-    #[test]
-    fn test_stream_capacity() {
-        let data = vec![0; 1024 * 1024];
-        let mut chunk = Chunk::new();
-        chunk.stream(Ref::new(1), &data).filter(Filter::FlateDecode);
-        assert!(chunk.buf.inner.capacity() < chunk.len() + 256);
     }
 
     #[test]
