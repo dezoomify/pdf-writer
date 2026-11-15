@@ -49,7 +49,7 @@ fn main() -> std::io::Result<()> {
     // well-known color standards are recognized by many print shops.
     let mut metallic = color_spaces
         .insert(metallic_name)
-        .start::<ColorSpace>()
+        .start::<ColorSpace<_>>()
         .separation(Name(b"PANTONE 8340 C"));
 
     // Separation color spaces rely on their (potentially proprietary) name only
@@ -83,7 +83,7 @@ fn main() -> std::io::Result<()> {
     // we can use a non-standard name for the separation color space.
     let mut pink = color_spaces
         .insert(hot_pink_name)
-        .start::<ColorSpace>()
+        .start::<ColorSpace<_>>()
         .separation(Name(b"Acme Pink"));
 
     // We set an approximation of the sRGB color space as the alternate color

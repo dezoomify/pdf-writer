@@ -74,14 +74,14 @@ impl DeviceColorSpace {
 /// This struct is created by [`Chunk::color_space`],
 /// [`Chunk::color_space`], [`ImageXObject::color_space`],
 /// [`Separation::alternate_color_space`] and [`Group::color_space`].
-pub struct ColorSpace<'a> {
-    obj: Obj<'a>,
+pub struct ColorSpace<'a, W: Write + ?Sized> {
+    obj: Obj<'a, W>,
 }
 
 writer!(ColorSpace: |obj| Self { obj });
 
 /// CIE-based color spaces.
-impl ColorSpace<'_> {
+impl<W: Write + ?Sized> ColorSpace<'_, W> {
     /// Write a `CalRGB` color space.
     pub fn cal_rgb(
         self,
@@ -167,13 +167,13 @@ impl ColorSpace<'_> {
 /// Writer for an _ICC profile stream_.
 ///
 /// This struct is created by [`Chunk::icc_profile`].
-pub struct IccProfile<'a> {
-    stream: Stream<'a>,
+pub struct IccProfile<'a, W: Write + ?Sized> {
+    stream: Stream<'a, W>,
 }
 
-impl<'a> IccProfile<'a> {
+impl<'a, W: Write + ?Sized> IccProfile<'a, W> {
     /// Create a new ICC profile stream writer
-    pub(crate) fn start(stream: Stream<'a>) -> Self {
+    pub(crate) fn start(stream: Stream<'a, W>) -> Self {
         Self { stream }
     }
 
@@ -193,7 +193,7 @@ impl<'a> IccProfile<'a> {
     /// supported. Must be a color space with the same number of
     /// components as the ICC profile. Pattern color spaces are not
     /// allowed.
-    pub fn alternate(&mut self) -> ColorSpace<'_> {
+    pub fn alternate(&mut self) -> ColorSpace<'_, W> {
         ColorSpace::start(self.insert(Name(b"Alternate")))
     }
 
@@ -228,10 +228,10 @@ impl<'a> IccProfile<'a> {
     }
 }
 
-deref!('a, IccProfile<'a> => Stream<'a>, stream);
+deref!('a, W,IccProfile<'a, W> => Stream<'a, W>, stream);
 
 /// Common calibrated color spaces.
-impl ColorSpace<'_> {
+impl<W: Write + ?Sized> ColorSpace<'_, W> {
     /// Write a `CalRGB` color space approximating sRGB.
     ///
     /// Use an ICC profile for more accurate results.
@@ -359,7 +359,7 @@ impl ColorSpace<'_> {
 /// PDF standards such as PDF/A, PDF/X, et cetera. Their appearance will be
 /// governed by any applicable [output intent](crate::writers::OutputIntent) and
 /// default color spaces.
-impl ColorSpace<'_> {
+impl<W: Write + ?Sized> ColorSpace<'_, W> {
     /// Write a `DeviceRGB` color space.
     pub fn device_rgb(self) {
         self.obj.primitive(ColorSpaceType::DeviceRgb.to_name());
@@ -377,12 +377,12 @@ impl ColorSpace<'_> {
 }
 
 /// Special color spaces.
-impl<'a> ColorSpace<'a> {
+impl<'a, W: Write + ?Sized> ColorSpace<'a, W> {
     /// Start writing a `Separation` color space. PDF 1.2+.
     ///
     /// The `color_name` argument is the name of the colorant that will be
     /// used by the printer.
-    pub fn separation(self, color_name: Name) -> Separation<'a> {
+    pub fn separation(self, color_name: Name) -> Separation<'a, W> {
         let mut array = self.obj.array();
         array.item(ColorSpaceType::Separation.to_name());
         array.item(color_name);
@@ -393,7 +393,10 @@ impl<'a> ColorSpace<'a> {
     ///
     /// The `names` argument contains the N names of the colorants for the
     /// respective components.
-    pub fn device_n<'n>(self, names: impl IntoIterator<Item = Name<'n>>) -> DeviceN<'a> {
+    pub fn device_n<'n>(
+        self,
+        names: impl IntoIterator<Item = Name<'n>>,
+    ) -> DeviceN<'a, W> {
         let mut array = self.obj.array();
         array.item(ColorSpaceType::DeviceN.to_name());
         array.push().array().items(names);
@@ -450,14 +453,14 @@ impl PatternType {
 /// alternate color space functions are called, the function panics.
 ///
 /// This struct is created by [`ColorSpace::separation`].
-pub struct Separation<'a> {
-    array: Array<'a>,
+pub struct Separation<'a, W: Write + ?Sized> {
+    array: Array<'a, W>,
     has_alternate: bool,
 }
 
-impl<'a> Separation<'a> {
+impl<'a, W: Write + ?Sized> Separation<'a, W> {
     /// Start the wrapper.
-    pub(crate) fn start(array: Array<'a>) -> Self {
+    pub(crate) fn start(array: Array<'a, W>) -> Self {
         Self { array, has_alternate: false }
     }
 
@@ -474,7 +477,7 @@ impl<'a> Separation<'a> {
     /// Start writing the `alternateSpace` element as a color space array. The
     /// color space must not be another `Pattern`, `Separation`, or `DeviceN`
     /// color space.
-    pub fn alternate_color_space(&mut self) -> ColorSpace<'_> {
+    pub fn alternate_color_space(&mut self) -> ColorSpace<'_, W> {
         if self.has_alternate {
             panic!("alternate space already specified");
         }
@@ -496,7 +499,7 @@ impl<'a> Separation<'a> {
 
     /// Start writing the `tintTransform` element as an exponential
     /// interpolation function.
-    pub fn tint_exponential(&mut self) -> ExponentialFunction<'_> {
+    pub fn tint_exponential(&mut self) -> ExponentialFunction<'_, W> {
         if !self.has_alternate {
             panic!("alternate space must be specified before tint transform");
         }
@@ -504,7 +507,7 @@ impl<'a> Separation<'a> {
     }
 
     /// Start writing the `tintTransform` element as a stitching function.
-    pub fn tint_stitching(&mut self) -> StitchingFunction<'_> {
+    pub fn tint_stitching(&mut self) -> StitchingFunction<'_, W> {
         if !self.has_alternate {
             panic!("alternate space must be specified before tint transform");
         }
@@ -534,15 +537,15 @@ impl<'a> Separation<'a> {
 /// panics.
 ///
 /// This struct is created by [`ColorSpace::device_n`].
-pub struct DeviceN<'a> {
-    array: Array<'a>,
+pub struct DeviceN<'a, W: Write + ?Sized> {
+    array: Array<'a, W>,
     has_alternate: bool,
     has_tint: bool,
 }
 
-impl<'a> DeviceN<'a> {
+impl<'a, W: Write + ?Sized> DeviceN<'a, W> {
     /// Start the wrapper.
-    pub(crate) fn start(array: Array<'a>) -> Self {
+    pub(crate) fn start(array: Array<'a, W>) -> Self {
         Self { array, has_alternate: false, has_tint: false }
     }
 
@@ -559,7 +562,7 @@ impl<'a> DeviceN<'a> {
     /// Start writing the `alternateSpace` element as a color space array. The
     /// color space must not be another `Pattern`, `Separation`, or `DeviceN`
     /// color space.
-    pub fn alternate_color_space(&mut self) -> ColorSpace<'_> {
+    pub fn alternate_color_space(&mut self) -> ColorSpace<'_, W> {
         if self.has_alternate {
             panic!("alternate space already specified");
         }
@@ -581,7 +584,7 @@ impl<'a> DeviceN<'a> {
 
     /// Start writing the `tintTransform` element as an exponential
     /// interpolation function.
-    pub fn tint_exponential(&mut self) -> ExponentialFunction<'_> {
+    pub fn tint_exponential(&mut self) -> ExponentialFunction<'_, W> {
         if !self.has_alternate {
             panic!("alternate space must be specified before tint transform");
         } else if self.has_tint {
@@ -593,7 +596,7 @@ impl<'a> DeviceN<'a> {
     }
 
     /// Start writing the `tintTransform` element as a stitching function.
-    pub fn tint_stitching(&mut self) -> StitchingFunction<'_> {
+    pub fn tint_stitching(&mut self) -> StitchingFunction<'_, W> {
         if !self.has_alternate {
             panic!("alternate space must be specified before tint transform");
         } else if self.has_tint {
@@ -621,7 +624,7 @@ impl<'a> DeviceN<'a> {
     }
 
     /// Start writing the `attrs` dictionary. PDF 1.6+.
-    pub fn attrs(&mut self) -> DeviceNAttrs<'_> {
+    pub fn attrs(&mut self) -> DeviceNAttrs<'_, W> {
         if !self.has_alternate {
             panic!(
                 "alternate space and tint transform must be specified before attributes"
@@ -637,13 +640,13 @@ impl<'a> DeviceN<'a> {
 /// Writer for a _DeviceN attributes dictionary_. PDF 1.6+.
 ///
 /// This struct is created by [`DeviceN::attrs`].
-pub struct DeviceNAttrs<'a> {
-    dict: Dict<'a>,
+pub struct DeviceNAttrs<'a, W: Write + ?Sized> {
+    dict: Dict<'a, W>,
 }
 
 writer!(DeviceNAttrs: |obj| Self { dict: obj.dict() });
 
-impl DeviceNAttrs<'_> {
+impl<W: Write + ?Sized> DeviceNAttrs<'_, W> {
     /// Write the `/Subtype` attribute.
     pub fn subtype(&mut self, subtype: DeviceNSubtype) -> &mut Self {
         self.dict.pair(Name(b"Subtype"), subtype.to_name());
@@ -655,19 +658,19 @@ impl DeviceNAttrs<'_> {
     ///
     /// Required if the `/Subtype` attribute is `NChannel`. Required for spot
     /// colors in PDF/A-2, PDF/A-3, and PDF/A-4.
-    pub fn colorants(&mut self) -> TypedDict<'_, Dict<'_>> {
+    pub fn colorants(&mut self) -> TypedDict<'_, Dict<'_, W>, W> {
         self.dict.insert(Name(b"Colorants")).dict().typed()
     }
 
     /// Start writing the `/Process` dictionary.
     ///
     /// Required if the `/Subtype` attribute is `Separation`.
-    pub fn process(&mut self) -> DeviceNProcess<'_> {
+    pub fn process(&mut self) -> DeviceNProcess<'_, W> {
         DeviceNProcess::start(self.dict.insert(Name(b"Process")))
     }
 
     /// Start writing the `/MixingHints` dictionary.
-    pub fn mixing_hints(&mut self) -> DeviceNMixingHints<'_> {
+    pub fn mixing_hints(&mut self) -> DeviceNMixingHints<'_, W> {
         DeviceNMixingHints::start(self.dict.insert(Name(b"MixingHints")))
     }
 }
@@ -675,13 +678,13 @@ impl DeviceNAttrs<'_> {
 /// Writer for a _DeviceN process dictionary_. PDF 1.6+.
 ///
 /// This struct is created by [`DeviceNAttrs::process`].
-pub struct DeviceNProcess<'a> {
-    dict: Dict<'a>,
+pub struct DeviceNProcess<'a, W: Write + ?Sized> {
+    dict: Dict<'a, W>,
 }
 
 writer!(DeviceNProcess: |obj| Self { dict: obj.dict() });
 
-impl DeviceNProcess<'_> {
+impl<W: Write + ?Sized> DeviceNProcess<'_, W> {
     /// Write the `/ColorSpace` attribute with a name. Required.
     pub fn color_space(&mut self, color_space: Name) -> &mut Self {
         self.dict.pair(Name(b"ColorSpace"), color_space);
@@ -689,7 +692,7 @@ impl DeviceNProcess<'_> {
     }
 
     /// Write the `/ColorSpace` attribute with an array. Required.
-    pub fn color_space_array(&mut self) -> ColorSpace<'_> {
+    pub fn color_space_array(&mut self) -> ColorSpace<'_, W> {
         ColorSpace::start(self.dict.insert(Name(b"ColorSpace")))
     }
 
@@ -730,18 +733,18 @@ impl DeviceNSubtype {
 /// Writer for a _DeviceN mixing hints dictionary_. PDF 1.6+.
 ///
 /// This struct is created by [`DeviceNAttrs::mixing_hints`].
-pub struct DeviceNMixingHints<'a> {
-    dict: Dict<'a>,
+pub struct DeviceNMixingHints<'a, W: Write + ?Sized> {
+    dict: Dict<'a, W>,
 }
 
 writer!(DeviceNMixingHints: |obj| Self { dict: obj.dict() });
 
-impl DeviceNMixingHints<'_> {
+impl<W: Write + ?Sized> DeviceNMixingHints<'_, W> {
     /// Start writing the `/Solidities` dictionary.
     ///
     /// Each key in the dictionary is a colorant name and each value is a number
     /// between 0 and 1 indicating the relative solidity of the colorant.
-    pub fn solidities(&mut self) -> TypedDict<'_, f32> {
+    pub fn solidities(&mut self) -> TypedDict<'_, f32, W> {
         self.dict.insert(Name(b"Solidities")).dict().typed()
     }
 
@@ -761,7 +764,7 @@ impl DeviceNMixingHints<'_> {
     ///
     /// Each key in the dictionary is a colorant name and each value is a number
     /// between 0 and 1 indicating the dot gain of the colorant.
-    pub fn dot_gain(&mut self) -> TypedDict<'_, f32> {
+    pub fn dot_gain(&mut self) -> TypedDict<'_, f32, W> {
         self.dict.insert(Name(b"DotGain")).dict().typed()
     }
 }
@@ -769,12 +772,12 @@ impl DeviceNMixingHints<'_> {
 /// Writer for a _tiling pattern stream_.
 ///
 /// This struct is created by [`Chunk::tiling_pattern`].
-pub struct TilingPattern<'a> {
-    stream: Stream<'a>,
+pub struct TilingPattern<'a, W: Write + ?Sized> {
+    stream: Stream<'a, W>,
 }
 
-impl<'a> TilingPattern<'a> {
-    pub(crate) fn start_with_stream(mut stream: Stream<'a>) -> Self {
+impl<'a, W: Write + ?Sized> TilingPattern<'a, W> {
+    pub(crate) fn start_with_stream(mut stream: Stream<'a, W>) -> Self {
         stream.pair(Name(b"Type"), Name(b"Pattern"));
         stream.pair(Name(b"PatternType"), PatternType::Tiling.to_int());
         Self { stream }
@@ -830,7 +833,7 @@ impl<'a> TilingPattern<'a> {
     /// Start writing the `/Resources` dictionary.
     ///
     /// Sets the resources used by the pattern. Required.
-    pub fn resources(&mut self) -> Resources<'_> {
+    pub fn resources(&mut self) -> Resources<'_, W> {
         self.insert(Name(b"Resources")).start()
     }
 
@@ -844,7 +847,7 @@ impl<'a> TilingPattern<'a> {
     }
 }
 
-deref!('a, TilingPattern<'a> => Stream<'a>, stream);
+deref!('a, W,TilingPattern<'a, W> => Stream<'a, W>, stream);
 
 /// Type of paint for a tiling pattern.
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]
@@ -888,8 +891,8 @@ impl TilingType {
 /// Writer for a _shading pattern dictionary_. PDF 1.3+.
 ///
 /// This struct is created by [`Chunk::shading_pattern`].
-pub struct ShadingPattern<'a> {
-    dict: Dict<'a>,
+pub struct ShadingPattern<'a, W: Write + ?Sized> {
+    dict: Dict<'a, W>,
 }
 
 writer!(ShadingPattern: |obj| {
@@ -899,9 +902,9 @@ writer!(ShadingPattern: |obj| {
     Self { dict }
 });
 
-impl ShadingPattern<'_> {
+impl<W: Write + ?Sized> ShadingPattern<'_, W> {
     /// Start writing the `/Shading` dictionary for a type 1, 2, or 3 shading.
-    pub fn function_shading(&mut self) -> FunctionShading<'_> {
+    pub fn function_shading(&mut self) -> FunctionShading<'_, W> {
         self.dict.insert(Name(b"Shading")).start()
     }
 
@@ -920,24 +923,24 @@ impl ShadingPattern<'_> {
     }
 
     /// Start writing the `/ExtGState` attribute.
-    pub fn ext_graphics(&mut self) -> ExtGraphicsState<'_> {
+    pub fn ext_graphics(&mut self) -> ExtGraphicsState<'_, W> {
         self.dict.insert(Name(b"ExtGState")).start()
     }
 }
 
-deref!('a, ShadingPattern<'a> => Dict< 'a>, dict);
+deref!('a, W,ShadingPattern<'a, W> => Dict< 'a, W>, dict);
 
 /// Writer for a _shading dictionary_. PDF 1.3+.
 ///
 /// This struct is created by [`Chunk::function_shading`] and
 /// [`ShadingPattern::function_shading`].
-pub struct FunctionShading<'a> {
-    dict: Dict<'a>,
+pub struct FunctionShading<'a, W: Write + ?Sized> {
+    dict: Dict<'a, W>,
 }
 
 writer!(FunctionShading: |obj| Self { dict: obj.dict() });
 
-impl FunctionShading<'_> {
+impl<W: Write + ?Sized> FunctionShading<'_, W> {
     /// Write the `/ShadingType` attribute.
     ///
     /// Sets the type of shading. The available and required attributes change
@@ -951,7 +954,7 @@ impl FunctionShading<'_> {
     ///
     /// Sets the color space of the shading function. May not be a `Pattern`
     /// space. Required.
-    pub fn color_space(&mut self) -> ColorSpace<'_> {
+    pub fn color_space(&mut self) -> ColorSpace<'_, W> {
         self.dict.insert(Name(b"ColorSpace")).start()
     }
 
@@ -1030,18 +1033,18 @@ impl FunctionShading<'_> {
     }
 }
 
-deref!('a, FunctionShading<'a> => Dict<'a>, dict);
+deref!('a, W,FunctionShading<'a, W> => Dict<'a, W>, dict);
 
 /// Writer for a _embedded file stream_.
 ///
 /// This struct is created by [`Chunk::stream_shading`].
-pub struct StreamShading<'a> {
-    stream: Stream<'a>,
+pub struct StreamShading<'a, W: Write + ?Sized> {
+    stream: Stream<'a, W>,
 }
 
-impl<'a> StreamShading<'a> {
+impl<'a, W: Write + ?Sized> StreamShading<'a, W> {
     /// Create a new character map writer.
-    pub(crate) fn start(stream: Stream<'a>) -> Self {
+    pub(crate) fn start(stream: Stream<'a, W>) -> Self {
         Self { stream }
     }
 
@@ -1058,7 +1061,7 @@ impl<'a> StreamShading<'a> {
     ///
     /// Sets the color space of the shading function. May not be a `Pattern`
     /// space. Required.
-    pub fn color_space(&mut self) -> ColorSpace<'_> {
+    pub fn color_space(&mut self) -> ColorSpace<'_, W> {
         self.stream.insert(Name(b"ColorSpace")).start()
     }
 
@@ -1142,7 +1145,7 @@ impl<'a> StreamShading<'a> {
     }
 }
 
-deref!('a, StreamShading<'a> => Stream<'a>, stream);
+deref!('a, W,StreamShading<'a, W> => Stream<'a, W>, stream);
 
 /// What kind of shading to use for a function-based shading.
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]
@@ -1197,13 +1200,13 @@ impl StreamShadingType {
 /// Writer for the _separation information dictionary_. PDF 1.3+.
 ///
 /// This struct is created by [`Catalog::separation_info`].
-pub struct SeparationInfo<'a> {
-    dict: Dict<'a>,
+pub struct SeparationInfo<'a, W: Write + ?Sized> {
+    dict: Dict<'a, W>,
 }
 
 writer!(SeparationInfo: |obj| Self { dict: obj.dict() });
 
-impl SeparationInfo<'_> {
+impl<W: Write + ?Sized> SeparationInfo<'_, W> {
     /// Write the `/Pages` attribute. Required.
     ///
     /// This indicates all page dictionaries in the document that represent
@@ -1233,7 +1236,7 @@ impl SeparationInfo<'_> {
     ///
     /// This shall be an Separation or DeviceN color space that further defines
     /// the separation color space.
-    pub fn color_space(&mut self) -> ColorSpace<'_> {
+    pub fn color_space(&mut self) -> ColorSpace<'_, W> {
         self.dict.insert(Name(b"ColorSpace")).start()
     }
 }
@@ -1242,8 +1245,8 @@ impl SeparationInfo<'_> {
 ///
 /// This describes the output conditions under which the document may be
 /// rendered. Encouraged by PDF/A.
-pub struct OutputIntent<'a> {
-    dict: Dict<'a>,
+pub struct OutputIntent<'a, W: Write + ?Sized> {
+    dict: Dict<'a, W>,
 }
 
 writer!(OutputIntent: |obj| {
@@ -1252,7 +1255,7 @@ writer!(OutputIntent: |obj| {
     Self { dict }
 });
 
-impl OutputIntent<'_> {
+impl<W: Write + ?Sized> OutputIntent<'_, W> {
     /// Write the `/S` attribute. Required.
     pub fn subtype(&mut self, subtype: OutputIntentSubtype) -> &mut Self {
         self.dict.pair(Name(b"S"), subtype.to_name());

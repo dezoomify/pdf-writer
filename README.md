@@ -18,6 +18,10 @@ destination on success. Passing `&mut destination` keeps ownership with the call
 `Content`, `Chunk`, and `UnicodeCmap` also take caller-supplied destinations.
 Serialization limits are available separately through their `limits()` methods.
 
+Builder types carry the same writer parameter, for example `Page<'a, W>` and
+`Dict<'a, W>`. It is normally inferred. Explicit builder type arguments need a
+placeholder, such as `.start::<Type1Font<_>>()`.
+
 ## Minimal example
 The following example creates a PDF with a single, empty A4 page.
 

@@ -4,8 +4,8 @@ use crate::object::TextStrLike;
 /// Writer for an _rendition dictionary_.
 ///
 /// This struct is created by [`Action::rendition`].
-pub struct Rendition<'a> {
-    dict: Dict<'a>,
+pub struct Rendition<'a, W: Write + ?Sized> {
+    dict: Dict<'a, W>,
 }
 
 writer!(Rendition: |obj| {
@@ -14,7 +14,7 @@ writer!(Rendition: |obj| {
     Self { dict }
 });
 
-impl Rendition<'_> {
+impl<W: Write + ?Sized> Rendition<'_, W> {
     /// Write the `/S` attribute to set the rendition type.
     pub fn subtype(&mut self, kind: RenditionType) -> &mut Self {
         self.pair(Name(b"S"), kind.to_name());
@@ -30,19 +30,19 @@ impl Rendition<'_> {
 
     /// Start writing the `/C`, i.e. media clip, dictionary which specifies what
     /// media should be played. Only permissible for Media Renditions.
-    pub fn media_clip(&mut self) -> MediaClip<'_> {
+    pub fn media_clip(&mut self) -> MediaClip<'_, W> {
         self.insert(Name(b"C")).start()
     }
 
     /// Start writing the `/P`, i.e. media play parameters, dictionary which
     /// specifies how the media should be played. Only permissible for Media
     /// Renditions.
-    pub fn media_play_params(&mut self) -> MediaPlayParams<'_> {
+    pub fn media_play_params(&mut self) -> MediaPlayParams<'_, W> {
         self.insert(Name(b"P")).start()
     }
 }
 
-deref!('a, Rendition<'a> => Dict<'a>, dict);
+deref!('a, W,Rendition<'a, W> => Dict<'a, W>, dict);
 
 /// Writer for an _media clip dictionary_.
 ///
@@ -66,8 +66,8 @@ deref!('a, Rendition<'a> => Dict<'a>, dict);
 /// platforms.
 ///
 /// [1]: https://helpx.adobe.com/acrobat/using/playing-video-audio-multimedia-formats.html#supported_video_audio_and_interactive_formats
-pub struct MediaClip<'a> {
-    dict: Dict<'a>,
+pub struct MediaClip<'a, W: Write + ?Sized> {
+    dict: Dict<'a, W>,
 }
 
 writer!(MediaClip: |obj| {
@@ -76,7 +76,7 @@ writer!(MediaClip: |obj| {
     Self { dict }
 });
 
-impl MediaClip<'_> {
+impl<W: Write + ?Sized> MediaClip<'_, W> {
     /// Write the `/S` attribute to set the media clip type.
     pub fn subtype(&mut self, kind: MediaClipType) -> &mut Self {
         self.pair(Name(b"S"), kind.to_name());
@@ -91,7 +91,7 @@ impl MediaClip<'_> {
     }
 
     /// Start writing the `/D` dictionary specifying the media data.
-    pub fn data(&mut self) -> FileSpec<'_> {
+    pub fn data(&mut self) -> FileSpec<'_, W> {
         self.insert(Name(b"D")).start()
     }
 
@@ -103,7 +103,7 @@ impl MediaClip<'_> {
     }
 
     /// Start writing the `/P`, i.e. media permissions, dictionary.
-    pub fn permissions(&mut self) -> MediaPermissions<'_> {
+    pub fn permissions(&mut self) -> MediaPermissions<'_, W> {
         self.insert(Name(b"P")).start()
     }
 
@@ -119,13 +119,13 @@ impl MediaClip<'_> {
     }
 }
 
-deref!('a, MediaClip<'a> => Dict<'a>, dict);
+deref!('a, W,MediaClip<'a, W> => Dict<'a, W>, dict);
 
 /// Writer for an _media play parameters dictionary_.
 ///
 /// This struct is created by [`Rendition::media_play_params`].
-pub struct MediaPlayParams<'a> {
-    dict: Dict<'a>,
+pub struct MediaPlayParams<'a, W: Write + ?Sized> {
+    dict: Dict<'a, W>,
 }
 
 writer!(MediaPlayParams: |obj| {
@@ -134,7 +134,7 @@ writer!(MediaPlayParams: |obj| {
     Self { dict }
 });
 
-impl MediaPlayParams<'_> {
+impl<W: Write + ?Sized> MediaPlayParams<'_, W> {
     /// Write the `/C` attribute inside a `/BE` dictionary specifying whether to
     /// display a player-specific controls.
     ///
@@ -147,13 +147,13 @@ impl MediaPlayParams<'_> {
     }
 }
 
-deref!('a, MediaPlayParams<'a> => Dict<'a>, dict);
+deref!('a, W,MediaPlayParams<'a, W> => Dict<'a, W>, dict);
 
 /// Writer for an _media permissions dictionary_.
 ///
 /// This struct is created by [`MediaClip::permissions`].
-pub struct MediaPermissions<'a> {
-    dict: Dict<'a>,
+pub struct MediaPermissions<'a, W: Write + ?Sized> {
+    dict: Dict<'a, W>,
 }
 
 writer!(MediaPermissions: |obj| {
@@ -162,7 +162,7 @@ writer!(MediaPermissions: |obj| {
     Self { dict }
 });
 
-impl MediaPermissions<'_> {
+impl<W: Write + ?Sized> MediaPermissions<'_, W> {
     /// Write the `/TF` attribute to control permissions to write a temporary file.
     pub fn temp_file(&mut self, tf: TempFileType) -> &mut Self {
         self.pair(Name(b"TF"), tf.to_str());
@@ -170,7 +170,7 @@ impl MediaPermissions<'_> {
     }
 }
 
-deref!('a, MediaPermissions<'a> => Dict<'a>, dict);
+deref!('a, W,MediaPermissions<'a, W> => Dict<'a, W>, dict);
 
 /// The circumstances under which it is acceptable to write a temporary file in
 /// order to play a media clip.

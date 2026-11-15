@@ -5,13 +5,13 @@ use crate::types::RenderingIntent;
 /// Writer for an _image XObject stream_.
 ///
 /// This struct is created by [`Chunk::image_xobject`].
-pub struct ImageXObject<'a> {
-    stream: Stream<'a>,
+pub struct ImageXObject<'a, W: Write + ?Sized> {
+    stream: Stream<'a, W>,
 }
 
-impl<'a> ImageXObject<'a> {
+impl<'a, W: Write + ?Sized> ImageXObject<'a, W> {
     /// Create a new image stream writer.
-    pub(crate) fn start(mut stream: Stream<'a>) -> Self {
+    pub(crate) fn start(mut stream: Stream<'a, W>) -> Self {
         stream.pair(Name(b"Type"), Name(b"XObject"));
         stream.pair(Name(b"Subtype"), Name(b"Image"));
         Self { stream }
@@ -34,7 +34,7 @@ impl<'a> ImageXObject<'a> {
     /// Required for all images except if using the `JPXDecode` filter.
     /// If this is an image soft mask, the color space must be `DeviceGray`.
     /// Must not be `Pattern`.
-    pub fn color_space(&mut self) -> ColorSpace<'_> {
+    pub fn color_space(&mut self) -> ColorSpace<'_, W> {
         self.insert(Name(b"ColorSpace")).start()
     }
 
@@ -157,12 +157,12 @@ impl<'a> ImageXObject<'a> {
 
     /// Start writing the `/AF` array to specify the associated files of the
     /// image. PDF 2.0+ or PDF/A-3.
-    pub fn associated_files(&mut self) -> TypedArray<'_, FileSpec<'_>> {
+    pub fn associated_files(&mut self) -> TypedArray<'_, FileSpec<'_, W>, W> {
         self.insert(Name(b"AF")).array().typed()
     }
 }
 
-deref!('a, ImageXObject<'a> => Stream<'a>, stream);
+deref!('a, W,ImageXObject<'a, W> => Stream<'a, W>, stream);
 
 /// What to do with in-data mask information in `JPXDecode` images.
 #[derive(Debug, Copy, Clone, Default, Eq, PartialEq, Hash)]
@@ -193,13 +193,13 @@ impl SMaskInData {
 ///
 /// Note that these have nothing to do with forms that have fields to fill out.
 /// Rather, they are a way to encapsulate and reuse content across the file.
-pub struct FormXObject<'a> {
-    stream: Stream<'a>,
+pub struct FormXObject<'a, W: Write + ?Sized> {
+    stream: Stream<'a, W>,
 }
 
-impl<'a> FormXObject<'a> {
+impl<'a, W: Write + ?Sized> FormXObject<'a, W> {
     /// Create a new form stream writer.
-    pub(crate) fn start(mut stream: Stream<'a>) -> Self {
+    pub(crate) fn start(mut stream: Stream<'a, W>) -> Self {
         stream.pair(Name(b"Type"), Name(b"XObject"));
         stream.pair(Name(b"Subtype"), Name(b"Form"));
         Self { stream }
@@ -222,13 +222,13 @@ impl<'a> FormXObject<'a> {
     /// Start writing the `/Resources` dictionary to specify the resources used
     /// by the XObject. This makes it independent of the parent content stream
     /// it is eventually invoked in. PDF 1.2+.
-    pub fn resources(&mut self) -> Resources<'_> {
+    pub fn resources(&mut self) -> Resources<'_, W> {
         self.insert(Name(b"Resources")).start()
     }
 
     /// Start writing the `/Group` dictionary to set up transparency model
     /// parameters and let this XObject be known as a group. PDF 1.4+.
-    pub fn group(&mut self) -> Group<'_> {
+    pub fn group(&mut self) -> Group<'_, W> {
         self.insert(Name(b"Group")).start()
     }
 
@@ -252,7 +252,7 @@ impl<'a> FormXObject<'a> {
     /// external document that the XObject is a reference to. PDF 1.4+.
     ///
     /// Note that this key is forbidden in PDF/A.
-    pub fn reference(&mut self) -> Reference<'_> {
+    pub fn reference(&mut self) -> Reference<'_, W> {
         self.insert(Name(b"Ref")).start()
     }
 
@@ -273,18 +273,18 @@ impl<'a> FormXObject<'a> {
 
     /// Start writing the `/AF` array to specify the associated files of the
     /// Form XObject. PDF 2.0+ or PDF/A-3.
-    pub fn associated_files(&mut self) -> TypedArray<'_, FileSpec<'_>> {
+    pub fn associated_files(&mut self) -> TypedArray<'_, FileSpec<'_, W>, W> {
         self.insert(Name(b"AF")).array().typed()
     }
 }
 
-deref!('a, FormXObject<'a> => Stream<'a>, stream);
+deref!('a, W,FormXObject<'a, W> => Stream<'a, W>, stream);
 
 /// Writer for a _group XObject dictionary_. PDF 1.4+.
 ///
 /// This struct is created by [`FormXObject::group`] and [`Page::group`].
-pub struct Group<'a> {
-    dict: Dict<'a>,
+pub struct Group<'a, W: Write + ?Sized> {
+    dict: Dict<'a, W>,
 }
 
 writer!(Group: |obj| {
@@ -293,7 +293,7 @@ writer!(Group: |obj| {
     Self { dict }
 });
 
-impl Group<'_> {
+impl<W: Write + ?Sized> Group<'_, W> {
     /// Set the `/S` attribute to `/Transparency`. Required to set the remaining
     /// transparency parameters.
     pub fn transparency(&mut self) -> &mut Self {
@@ -307,7 +307,7 @@ impl Group<'_> {
     /// color space cannot be derived from the parent.
     ///
     /// Required in PDF/A-2 through PDF/A-4 if there is no OutputIntent.
-    pub fn color_space(&mut self) -> ColorSpace<'_> {
+    pub fn color_space(&mut self) -> ColorSpace<'_, W> {
         self.insert(Name(b"CS")).start()
     }
 
@@ -332,23 +332,23 @@ impl Group<'_> {
     }
 }
 
-deref!('a, Group<'a> => Dict<'a>, dict);
+deref!('a, W,Group<'a, W> => Dict<'a, W>, dict);
 
 /// Writer for an _external XObject reference dictionary_. PDF 1.4+.
 ///
 /// This struct is created by [`FormXObject::reference`].
 ///
 /// Reference XObjects are forbidden in PDF/A.
-pub struct Reference<'a> {
-    dict: Dict<'a>,
+pub struct Reference<'a, W: Write + ?Sized> {
+    dict: Dict<'a, W>,
 }
 
 writer!(Reference: |obj| Self { dict: obj.dict() });
 
-impl Reference<'_> {
+impl<W: Write + ?Sized> Reference<'_, W> {
     /// Start writing the `/F` attribute to set a file specification dictionary.
     /// Required.
-    pub fn file_spec(&mut self) -> FileSpec<'_> {
+    pub fn file_spec(&mut self) -> FileSpec<'_, W> {
         self.insert(Name(b"F")).start()
     }
 
@@ -374,4 +374,4 @@ impl Reference<'_> {
     }
 }
 
-deref!('a, Reference<'a> => Dict<'a>, dict);
+deref!('a, W,Reference<'a, W> => Dict<'a, W>, dict);

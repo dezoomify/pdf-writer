@@ -15,6 +15,10 @@ destination on success. Passing `&mut destination` keeps ownership with the call
 `Content`, `Chunk`, and `UnicodeCmap` also take caller-supplied destinations.
 Serialization limits are available separately through their `limits()` methods.
 
+Builder types carry the same writer parameter, for example `Page<'a, W>` and
+`Dict<'a, W>`. It is normally inferred. Explicit builder type arguments need a
+placeholder, such as `.start::<Type1Font<_>>()`.
+
 # Writers
 The writers contained is this crate fall roughly into two categories.
 
@@ -209,7 +213,7 @@ pub use self::object::{
     Rect, Ref, Rewrite, Str, Stream, TextStr, TextStrLike, TextStrWithLang, TypedArray,
     TypedDict, Writer,
 };
-use self::output::{Output, Sink};
+use self::output::Output;
 
 use std::fmt::{self, Debug, Formatter, Write as _};
 use std::io::{self, Write};
@@ -225,7 +229,7 @@ use self::writers::*;
 /// into a [`Chunk`], which you can add to the [`Pdf`] (or another chunk) later.
 /// Therefore, most writing methods are exposed on the chunk type, which this
 /// type dereferences to.
-#[must_use = "call finish to write the trailer and check for I/O errors"]
+#[must_use = "call finish to write the trailer and check for I/W errors"]
 pub struct Pdf<W: Write> {
     chunk: Chunk<W>,
     trailer_data: TrailerData,
@@ -275,7 +279,7 @@ impl<W: Write> Pdf<W> {
         let (major, minor) = options.version;
         assert!(major < 10 && minor < 10, "PDF version components must be single digits");
         let mut chunk = Chunk::with_settings(writer, options.settings);
-        let output = chunk.output.as_output();
+        let output = &mut chunk.output;
         output.extend(b"%PDF-");
         output.extend(&[b'0' + major, b'.', b'0' + minor]);
         output.extend(b"\n%");
@@ -298,7 +302,7 @@ impl<W: Write> Pdf<W> {
     ///
     /// This will also register the document catalog with the file trailer,
     /// meaning that you don't need to provide the given `id` anywhere else.
-    pub fn catalog(&mut self, id: Ref) -> Catalog<'_> {
+    pub fn catalog(&mut self, id: Ref) -> Catalog<'_, W> {
         self.trailer_data.catalog_id = Some(id);
         self.indirect(id).start()
     }
@@ -308,7 +312,7 @@ impl<W: Write> Pdf<W> {
     /// This will also register the document information dictionary with the
     /// file trailer, meaning that you don't need to provide the given `id`
     /// anywhere else.
-    pub fn document_info(&mut self, id: Ref) -> DocumentInfo<'_> {
+    pub fn document_info(&mut self, id: Ref) -> DocumentInfo<'_, W> {
         self.trailer_data.info_id = Some(id);
         self.indirect(id).start()
     }
@@ -323,7 +327,7 @@ impl<W: Write> Pdf<W> {
         if sink.failed() {
             return sink.finish();
         }
-        let output = sink.as_output();
+        let output = &mut sink;
         let trailer_data = self.trailer_data;
         let xref_offset = output.len();
 
@@ -394,7 +398,7 @@ impl<W: Write> Pdf<W> {
         if sink.failed() {
             return sink.finish();
         }
-        let output = sink.as_output();
+        let output = &mut sink;
         let trailer_data = self.trailer_data;
 
         // Include the reference of the xref stream in the offsets as well!
@@ -451,7 +455,11 @@ pub enum XRefFilter {
     Multiple(Vec<Filter>),
 }
 
-fn finish_trailer(output: &mut Output<'_>, xref_offset: u64, pad: &[u8]) {
+fn finish_trailer<W: Write + ?Sized>(
+    output: &mut Output<W>,
+    xref_offset: u64,
+    pad: &[u8],
+) {
     output.extend(pad);
     // Write startxref pointing to the xref stream
     output.extend(b"startxref\n");
@@ -532,7 +540,7 @@ struct TrailerData {
 }
 
 impl TrailerData {
-    fn write_into_dict(&self, dict: &mut Dict, xref_len: i32) {
+    fn write_into_dict<W: Write + ?Sized>(&self, dict: &mut Dict<W>, xref_len: i32) {
         dict.pair(Name(b"Size"), xref_len);
 
         if let Some(catalog_id) = self.catalog_id {
@@ -594,17 +602,17 @@ impl XRefWriter for XRefStreamWriter {
     }
 }
 
-struct PlainXRefWriter<'a> {
-    output: &'a mut Output<'a>,
+struct PlainXRefWriter<'a, W: Write + ?Sized> {
+    output: &'a mut Output<W>,
 }
 
-impl<'a> PlainXRefWriter<'a> {
-    fn new(output: &'a mut Output<'a>) -> Self {
+impl<'a, W: Write + ?Sized> PlainXRefWriter<'a, W> {
+    fn new(output: &'a mut Output<W>) -> Self {
         Self { output }
     }
 }
 
-impl<'a> XRefWriter for PlainXRefWriter<'a> {
+impl<'a, W: Write + ?Sized> XRefWriter for PlainXRefWriter<'a, W> {
     fn prologue(&mut self, xref_len: i32) {
         self.output.extend(b"xref\n0 ");
         self.output.push_int(xref_len);
@@ -644,7 +652,7 @@ mod tests {
     /// Return the slice of bytes written for an object.
     pub fn slice_obj<F>(f: F, settings: Settings) -> Vec<u8>
     where
-        F: FnOnce(Obj<'_>),
+        F: FnOnce(Obj<'_, Vec<u8>>),
     {
         let buf = slice(|w| f(w.indirect(Ref::new(1))), settings);
         if settings.pretty {

@@ -5,8 +5,8 @@ use crate::object::TextStrLike;
 ///
 /// This struct is created by [`Annotation::file_spec`],
 /// [`Reference::file_spec`], [`MediaClip::data`], and [`Action::file_spec`].
-pub struct FileSpec<'a> {
-    dict: Dict<'a>,
+pub struct FileSpec<'a, W: Write + ?Sized> {
+    dict: Dict<'a, W>,
 }
 
 writer!(FileSpec: |obj| {
@@ -15,7 +15,7 @@ writer!(FileSpec: |obj| {
     Self { dict }
 });
 
-impl FileSpec<'_> {
+impl<W: Write + ?Sized> FileSpec<'_, W> {
     /// Write the `/FS` attribute to set the file system this entry relates to.
     /// If you set the `system` argument to `Name(b"URL")`, this becomes an URL
     /// specification.
@@ -86,18 +86,18 @@ impl FileSpec<'_> {
     }
 }
 
-deref!('a, FileSpec<'a> => Dict<'a>, dict);
+deref!('a, W,FileSpec<'a, W> => Dict<'a, W>, dict);
 
 /// Writer for an _embedded file stream_.
 ///
 /// This struct is created by [`Chunk::embedded_file`].
-pub struct EmbeddedFile<'a> {
-    stream: Stream<'a>,
+pub struct EmbeddedFile<'a, W: Write + ?Sized> {
+    stream: Stream<'a, W>,
 }
 
-impl<'a> EmbeddedFile<'a> {
+impl<'a, W: Write + ?Sized> EmbeddedFile<'a, W> {
     /// Create a new embedded file writer.
-    pub(crate) fn start(mut stream: Stream<'a>) -> Self {
+    pub(crate) fn start(mut stream: Stream<'a, W>) -> Self {
         stream.pair(Name(b"Type"), Name(b"EmbeddedFile"));
         Self { stream }
     }
@@ -114,23 +114,23 @@ impl<'a> EmbeddedFile<'a> {
     }
 
     /// Start writing the `/Params` dictionary.
-    pub fn params(&mut self) -> EmbeddingParams<'_> {
+    pub fn params(&mut self) -> EmbeddingParams<'_, W> {
         self.insert(Name(b"Params")).start()
     }
 }
 
-deref!('a, EmbeddedFile<'a> => Stream<'a>, stream);
+deref!('a, W,EmbeddedFile<'a, W> => Stream<'a, W>, stream);
 
 /// Writer for an _embedded file parameter dictionary_.
 ///
 /// This struct is created by [`EmbeddedFile::params`].
-pub struct EmbeddingParams<'a> {
-    dict: Dict<'a>,
+pub struct EmbeddingParams<'a, W: Write + ?Sized> {
+    dict: Dict<'a, W>,
 }
 
 writer!(EmbeddingParams: |obj| Self { dict: obj.dict() });
 
-impl EmbeddingParams<'_> {
+impl<W: Write + ?Sized> EmbeddingParams<'_, W> {
     /// Write the `/Size` attribute to set the uncompressed file size in bytes.
     pub fn size(&mut self, size: i32) -> &mut Self {
         self.pair(Name(b"Size"), size);
@@ -158,7 +158,7 @@ impl EmbeddingParams<'_> {
     }
 }
 
-deref!('a, EmbeddingParams<'a> => Dict<'a>, dict);
+deref!('a, W,EmbeddingParams<'a, W> => Dict<'a, W>, dict);
 
 /// How an embedded file relates to the PDF document it is embedded in.
 /// PDF 1.7 with PDF/A-3, PDF 2.0+ (including PDF/A-4f).

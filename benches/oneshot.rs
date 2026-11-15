@@ -1,6 +1,6 @@
 use std::io::Write;
 
-use pdf_writer::{Content, Pdf, Rect, Ref};
+use pdf_writer::{Content, Name, Pdf, Rect, Ref, Str};
 
 fn bench_alloc() -> Vec<u8> {
     Vec::with_capacity(16)
@@ -54,6 +54,23 @@ fn bench_new() -> Pdf<Vec<u8>> {
     Pdf::new(Vec::new())
 }
 
+fn bench_text() -> Vec<u8> {
+    let mut content = Content::new(Vec::new());
+    content
+        .begin_text()
+        .set_font(Name(b"F1"), 12.0)
+        .next_line(50.0, 780.0);
+    for line in 0..40 {
+        content.next_line(0.0, -16.0);
+        content.show(Str(std::hint::black_box(
+            b"The quick brown fox jumps over the lazy dog (PDF) \\ 0123456789",
+        )));
+        content.set_char_spacing((line % 4) as f32 * 0.25);
+    }
+    content.end_text();
+    content.finish().unwrap()
+}
+
 fn bench_full() -> Vec<u8> {
     let mut w = Pdf::new(Vec::new());
     w.catalog(Ref::new(1));
@@ -70,6 +87,7 @@ iai::main!(
     bench_byte_by_byte,
     bench_std_format,
     bench_content,
+    bench_text,
     bench_new,
     bench_full,
 );

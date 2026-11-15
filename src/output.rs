@@ -3,12 +3,9 @@ use std::io::{self, Write};
 
 use crate::{Limits, Primitive};
 
-// Erase only the destination type so nested object writers stay nongeneric.
-pub type Output<'a> = Sink<dyn Write + 'a>;
-
 /// Serialization state and a caller-supplied destination.
 #[doc(hidden)]
-pub struct Sink<W: Write + ?Sized> {
+pub struct Output<W: Write + ?Sized> {
     len: u64,
     last: Option<u8>,
     limits: Limits,
@@ -16,7 +13,7 @@ pub struct Sink<W: Write + ?Sized> {
     pub(crate) writer: W,
 }
 
-impl<W: Write> Sink<W> {
+impl<W: Write> Output<W> {
     pub(crate) fn new(writer: W) -> Self {
         Self {
             len: 0,
@@ -25,10 +22,6 @@ impl<W: Write> Sink<W> {
             error: None,
             writer,
         }
-    }
-
-    pub(crate) fn as_output(&mut self) -> &mut Output<'_> {
-        self
     }
 
     pub(crate) fn finish(mut self) -> io::Result<W> {
@@ -40,7 +33,7 @@ impl<W: Write> Sink<W> {
     }
 }
 
-impl<W: Write + ?Sized> Sink<W> {
+impl<W: Write + ?Sized> Output<W> {
     pub(crate) fn failed(&self) -> bool {
         self.error.is_some()
     }
@@ -81,9 +74,6 @@ impl<W: Write + ?Sized> Sink<W> {
             }
         }
     }
-}
-
-impl Output<'_> {
     pub(crate) fn is_empty(&self) -> bool {
         self.len() == 0
     }
@@ -146,7 +136,7 @@ impl Output<'_> {
 }
 
 // Formatting cannot fail independently; I/O errors are retained until finish.
-impl<W: Write + ?Sized> fmt::Write for Sink<W> {
+impl<W: Write + ?Sized> fmt::Write for Output<W> {
     fn write_str(&mut self, text: &str) -> fmt::Result {
         self.extend(text.as_bytes());
         Ok(())

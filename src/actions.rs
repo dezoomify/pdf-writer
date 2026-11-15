@@ -4,8 +4,8 @@ use super::*;
 ///
 /// This struct is created by [`Annotation::action`] and many keys of
 /// [`AdditionalActions`].
-pub struct Action<'a> {
-    dict: Dict<'a>,
+pub struct Action<'a, W: Write + ?Sized> {
+    dict: Dict<'a, W>,
 }
 
 writer!(Action: |obj| {
@@ -14,7 +14,7 @@ writer!(Action: |obj| {
     Self { dict }
 });
 
-impl Action<'_> {
+impl<W: Write + ?Sized> Action<'_, W> {
     /// Write the `/S` attribute to set the action type.
     pub fn action_type(&mut self, kind: ActionType) -> &mut Self {
         self.pair(Name(b"S"), kind.to_name());
@@ -23,7 +23,7 @@ impl Action<'_> {
 
     /// Start writing the `/D` attribute to set the destination of this
     /// GoTo-type action.
-    pub fn destination(&mut self) -> Destination<'_> {
+    pub fn destination(&mut self) -> Destination<'_, W> {
         self.insert(Name(b"D")).start()
     }
 
@@ -40,7 +40,7 @@ impl Action<'_> {
     /// - `SubmitForm`: script location of the webserver that processes the
     ///   submission
     /// - `ImportData`: the FDF file from which to import data.
-    pub fn file_spec(&mut self) -> FileSpec<'_> {
+    pub fn file_spec(&mut self) -> FileSpec<'_, W> {
         self.insert(Name(b"F")).start()
     }
 
@@ -85,7 +85,7 @@ impl Action<'_> {
     /// Start writing the `/Fields` array to set the fields which are
     /// [include/exclude](FormActionFlags::INCLUDE_EXCLUDE) when submitting a
     /// form, resetting a form, or loading an FDF file.
-    pub fn fields(&mut self) -> Fields<'_> {
+    pub fn fields(&mut self) -> Fields<'_, W> {
         self.insert(Name(b"Fields")).start()
     }
 
@@ -112,12 +112,12 @@ impl Action<'_> {
 
     /// Start writing the `/R` dictionary. Only permissible for the subtype
     /// `Rendition`.
-    pub fn rendition(&mut self) -> Rendition<'_> {
+    pub fn rendition(&mut self) -> Rendition<'_, W> {
         self.insert(Name(b"R")).start()
     }
 }
 
-deref!('a, Action<'a> => Dict<'a>, dict);
+deref!('a, W,Action<'a, W> => Dict<'a, W>, dict);
 
 /// The operation to perform when a rendition action is triggered.
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]
@@ -141,13 +141,13 @@ pub enum RenditionOperation {
 /// Writer for a _fields array_.
 ///
 /// This struct is created by [`Action::fields`].
-pub struct Fields<'a> {
-    array: Array<'a>,
+pub struct Fields<'a, W: Write + ?Sized> {
+    array: Array<'a, W>,
 }
 
 writer!(Fields: |obj| Self { array: obj.array() });
 
-impl Fields<'_> {
+impl<W: Write + ?Sized> Fields<'_, W> {
     /// The indirect reference to the field.
     pub fn id(&mut self, id: Ref) -> &mut Self {
         self.array.item(id);
@@ -176,7 +176,7 @@ impl Fields<'_> {
     }
 }
 
-deref!('a, Fields<'a> => Array<'a>, array);
+deref!('a, W,Fields<'a, W> => Array<'a, W>, array);
 
 /// What kind of action to perform when clicking a link annotation.
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]
@@ -293,60 +293,60 @@ bitflags::bitflags! {
 /// This struct is created by [`Annotation::additional_actions`],
 /// [`Field::additional_actions`], [`Page::additional_actions`] and
 /// [`Catalog::additional_actions`].
-pub struct AdditionalActions<'a> {
-    dict: Dict<'a>,
+pub struct AdditionalActions<'a, W: Write + ?Sized> {
+    dict: Dict<'a, W>,
 }
 
 writer!(AdditionalActions: |obj| Self { dict: obj.dict() });
 
 /// Only permissible for [annotations](Annotation).
-impl AdditionalActions<'_> {
+impl<W: Write + ?Sized> AdditionalActions<'_, W> {
     /// Start writing the `/E` dictionary. An action that shall be performed
     /// when the cursor enters the annotation's active area. Only permissible
     /// for annotations. PDF 1.2+.
-    pub fn annot_curser_enter(&mut self) -> Action<'_> {
+    pub fn annot_curser_enter(&mut self) -> Action<'_, W> {
         self.insert(Name(b"E")).start()
     }
 
     /// Start writing the `/X` dictionary. An action that shall be performed
     /// when the cursor exits the annotation's active area. Only permissible for
     /// annotations. PDF 1.2+.
-    pub fn annot_cursor_exit(&mut self) -> Action<'_> {
+    pub fn annot_cursor_exit(&mut self) -> Action<'_, W> {
         self.insert(Name(b"X")).start()
     }
 
     /// Start writing the `/D` dictionary. This sets the action action
     /// that shall be performed when the mouse button is pressed inside the
     /// annotation's active area. Only permissible for annotations. PDF 1.2+.
-    pub fn annot_mouse_press(&mut self) -> Action<'_> {
+    pub fn annot_mouse_press(&mut self) -> Action<'_, W> {
         self.insert(Name(b"D")).start()
     }
 
     /// Start writing the `/U` dictionary. This sets the action action that
     /// shall be performed when the mouse button is released inside the
     /// annotation's active area. Only permissible for annotations. PDF 1.2+.
-    pub fn annot_mouse_release(&mut self) -> Action<'_> {
+    pub fn annot_mouse_release(&mut self) -> Action<'_, W> {
         self.insert(Name(b"U")).start()
     }
 
     /// Start writing the `/PO` dictionary. This sets the action action that
     /// shall be performed when the page containing the annotation is opened.
     /// Only permissible for annotations. PDF 1.5+.
-    pub fn annot_page_open(&mut self) -> Action<'_> {
+    pub fn annot_page_open(&mut self) -> Action<'_, W> {
         self.insert(Name(b"PO")).start()
     }
 
     /// Start writing the `/PC` dictionary. This sets the action action that
     /// shall be performed when the page containing the annotation is closed.
     /// Only permissible for annotations. PDF 1.5+.
-    pub fn annot_page_close(&mut self) -> Action<'_> {
+    pub fn annot_page_close(&mut self) -> Action<'_, W> {
         self.insert(Name(b"PV")).start()
     }
 
     /// Start writing the `/PV` dictionary. This sets the action action that
     /// shall be performed when the page containing the annotation becomes
     /// visible. Only permissible for annotations. PDF 1.5+.
-    pub fn annot_page_visible(&mut self) -> Action<'_> {
+    pub fn annot_page_visible(&mut self) -> Action<'_, W> {
         self.insert(Name(b"PV")).start()
     }
 
@@ -354,57 +354,57 @@ impl AdditionalActions<'_> {
     /// shall be performed when the page containing the annotation is no longer
     /// visible in the conforming reader's user interface. Only permissible for
     /// annotations. PDF 1.5+.
-    pub fn annot_page_invisible(&mut self) -> Action<'_> {
+    pub fn annot_page_invisible(&mut self) -> Action<'_, W> {
         self.insert(Name(b"PI")).start()
     }
 }
 
 /// Only permissible for [widget](crate::types::AnnotationType::Widget)
 /// [annotations](Annotation).
-impl AdditionalActions<'_> {
+impl<W: Write + ?Sized> AdditionalActions<'_, W> {
     /// Start writing the `/Fo` dictionary. This sets the action that shall be
     /// performed when the annotation receives the input focus. Only permissible
     /// for widget annotations. PDF 1.2+.
-    pub fn widget_focus(&mut self) -> Action<'_> {
+    pub fn widget_focus(&mut self) -> Action<'_, W> {
         self.insert(Name(b"Fo")).start()
     }
 
     /// Start writing the `/Bl` dictionary. This sets the action that shall be
     /// performed when the annotation loses the input focus. Only permissible
     /// for widget annotations. PDF 1.2+.
-    pub fn widget_focus_loss(&mut self) -> Action<'_> {
+    pub fn widget_focus_loss(&mut self) -> Action<'_, W> {
         self.insert(Name(b"Bl")).start()
     }
 }
 
 /// Only permissible for [page objects](Page).
-impl AdditionalActions<'_> {
+impl<W: Write + ?Sized> AdditionalActions<'_, W> {
     /// Start writing the `/O` dictionary. This sets the action that shall be
     /// performed when the page is opened. This action is independent of any
     /// that may be defined by the open action entry in the
     /// [document catalog](Catalog) and shall be executed after such an action.
     /// Only permissible for [page objects](Page). PDF 1.2+.
-    pub fn page_open(&mut self) -> Action<'_> {
-        self.insert(Name(b"O")).start()
+    pub fn page_open(&mut self) -> Action<'_, W> {
+        self.insert(Name(b"W")).start()
     }
 
     /// Start writing the `/C` dictionary. This sets the action that shall
     /// be performed when the page is closed. This action applies to the page
     /// being closed and shall be executed before any other page is opened. Only
     /// permissible for [page objects](Page). PDF 1.2+.
-    pub fn page_close(&mut self) -> Action<'_> {
+    pub fn page_close(&mut self) -> Action<'_, W> {
         self.insert(Name(b"C")).start()
     }
 }
 
 /// Only permisible for form fields.
-impl AdditionalActions<'_> {
+impl<W: Write + ?Sized> AdditionalActions<'_, W> {
     /// Start writing the `/K` dictionary. This sets the JavaScript action that
     /// shall be performed when the user modifies a character in a text field
     /// or combo box or modifies the selection in a scrollable list box. This
     /// action may check the added text for validity and reject or modify it.
     /// Only permissible for form fields. PDF 1.3+.
-    pub fn form_calculate_partial(&mut self) -> Action<'_> {
+    pub fn form_calculate_partial(&mut self) -> Action<'_, W> {
         self.insert(Name(b"K")).start()
     }
 
@@ -412,7 +412,7 @@ impl AdditionalActions<'_> {
     /// that shall be performed before the field is formatted to display its
     /// value. This action may modify the field's value before formatting. Only
     /// permissible for form fields. PDF 1.3+.
-    pub fn form_format(&mut self) -> Action<'_> {
+    pub fn form_format(&mut self) -> Action<'_, W> {
         self.insert(Name(b"F")).start()
     }
 
@@ -420,7 +420,7 @@ impl AdditionalActions<'_> {
     /// shall be performed when the field's value is changed. This action may
     /// check the new value for validity. Only permissible for form fields.
     /// PDF 1.3+.
-    pub fn form_validate(&mut self) -> Action<'_> {
+    pub fn form_validate(&mut self) -> Action<'_, W> {
         self.insert(Name(b"V")).start()
     }
 
@@ -429,47 +429,47 @@ impl AdditionalActions<'_> {
     /// of another field changes. The order in which the document's fields are
     /// recalculated shall be defined by the `/CO` entry in the interactive form
     /// dictionary. Only permissible for form fields. PDF 1.3+.
-    pub fn form_calculate(&mut self) -> Action<'_> {
+    pub fn form_calculate(&mut self) -> Action<'_, W> {
         self.insert(Name(b"C")).start()
     }
 }
 
 /// Only permisible for [document catalog](Catalog).
-impl AdditionalActions<'_> {
+impl<W: Write + ?Sized> AdditionalActions<'_, W> {
     /// Start writing the `/WC` dictionary. This sets the JavaScript action
     /// that shall be performed before closing a document. Only permissible for
     /// the [document catalog](Catalog) PDF 1.4+.
-    pub fn cat_before_close(&mut self) -> Action<'_> {
+    pub fn cat_before_close(&mut self) -> Action<'_, W> {
         self.insert(Name(b"WC")).start()
     }
 
     /// Start writing the `/WS` dictionary. This sets the JavaScript action
     /// that shall be performed before saving a document. Only permissible for
     /// the [document catalog](Catalog) PDF 1.4+.
-    pub fn cat_before_save(&mut self) -> Action<'_> {
+    pub fn cat_before_save(&mut self) -> Action<'_, W> {
         self.insert(Name(b"WS")).start()
     }
 
     /// Start writing the `/DS` dictionary. This sets the JavaScript action
     /// that shall be performed after saving a document. Only permissible for
     /// the [document catalog](Catalog) PDF 1.4+.
-    pub fn cat_after_save(&mut self) -> Action<'_> {
+    pub fn cat_after_save(&mut self) -> Action<'_, W> {
         self.insert(Name(b"DS")).start()
     }
 
     /// Start writing the `/WP` dictionary. This sets the JavaScript action
     /// that shall be performed before printing a document. Only permissible for
     /// the [document catalog](Catalog) PDF 1.4+.
-    pub fn cat_before_print(&mut self) -> Action<'_> {
+    pub fn cat_before_print(&mut self) -> Action<'_, W> {
         self.insert(Name(b"WP")).start()
     }
 
     /// Start writing the `/DP` dictionary. This sets the JavaScript action
     /// that shall be performed after printing a document. Only permissible for
     /// the [document catalog](Catalog) PDF 1.4+.
-    pub fn cat_after_print(&mut self) -> Action<'_> {
+    pub fn cat_after_print(&mut self) -> Action<'_, W> {
         self.insert(Name(b"DP")).start()
     }
 }
 
-deref!('a, AdditionalActions<'a> => Dict<'a>, dict);
+deref!('a, W,AdditionalActions<'a, W> => Dict<'a, W>, dict);

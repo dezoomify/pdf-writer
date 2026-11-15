@@ -42,23 +42,23 @@ macro_rules! test_primitive {
 /// Implements the `Writer`, `Rewrite` and `Typed` traits.
 macro_rules! writer {
     ($ty:ident: |$obj:ident| $($tts:tt)*) => {
-        impl<'a> Writer<'a> for $ty<'a> {
+        impl<'a, W: std::io::Write + ?Sized> Writer<'a, W> for $ty<'a, W> {
             #[inline]
-            fn start($obj: Obj<'a>) -> Self {
+            fn start($obj: Obj<'a, W>) -> Self {
                 $($tts)*
             }
         }
 
-        impl<'a, 'any> Rewrite<'a> for $ty<'any> {
-            type Output = $ty<'a>;
+        impl<'a, 'any, W: std::io::Write + ?Sized + 'a> Rewrite<'a, W> for $ty<'any, W> {
+            type Output = $ty<'a, W>;
         }
     };
 }
 
 /// Implements `Deref` and `DerefMut` by delegating to a field of a struct.
 macro_rules! deref {
-    ($a:lifetime, $from:ty => $to:ty, $field:ident) => {
-        impl<$a> std::ops::Deref for $from {
+    ($a:lifetime, $dest:ident, $from:ty => $to:ty, $field:ident) => {
+        impl<$a, $dest: std::io::Write + ?Sized> std::ops::Deref for $from {
             type Target = $to;
 
             #[inline]
@@ -67,7 +67,7 @@ macro_rules! deref {
             }
         }
 
-        impl<$a> std::ops::DerefMut for $from {
+        impl<$a, $dest: std::io::Write + ?Sized> std::ops::DerefMut for $from {
             #[inline]
             fn deref_mut(&mut self) -> &mut Self::Target {
                 &mut self.$field

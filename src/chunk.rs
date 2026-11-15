@@ -30,9 +30,9 @@ impl Default for Settings {
 ///
 /// Always call [`finish`](Self::finish), or append the chunk to a PDF, to check
 /// for I/O errors. Destinations must be empty and positioned at their beginning.
-#[must_use = "finish the chunk or append it to a PDF to check for I/O errors"]
+#[must_use = "finish the chunk or append it to a PDF to check for I/W errors"]
 pub struct Chunk<W: Write> {
-    pub(crate) output: Sink<W>,
+    pub(crate) output: Output<W>,
     pub(crate) offsets: Vec<(Ref, u64)>,
     pub(crate) settings: Settings,
 }
@@ -46,7 +46,7 @@ impl<W: Write> Chunk<W> {
     /// Create a chunk writing to `writer` with the given settings.
     pub fn with_settings(writer: W, settings: Settings) -> Self {
         Self {
-            output: Sink::new(writer),
+            output: Output::new(writer),
             offsets: vec![],
             settings,
         }
@@ -164,9 +164,9 @@ impl<R: Write + AsRef<[u8]>> Chunk<R> {
 /// Indirect objects and streams.
 impl<W: Write> Chunk<W> {
     /// Start writing an indirectly referenceable object.
-    pub fn indirect(&mut self, id: Ref) -> Obj<'_> {
+    pub fn indirect(&mut self, id: Ref) -> Obj<'_, W> {
         self.offsets.push((id, self.output.len()));
-        Obj::indirect(self.output.as_output(), id, self.settings)
+        Obj::indirect(&mut self.output, id, self.settings)
     }
 
     /// Start writing an indirectly referenceable stream.
@@ -218,7 +218,7 @@ impl<W: Write> Chunk<W> {
     /// You can pass compressed data and specify a filter.
     ///
     /// Panics if the stream length exceeds `i32::MAX`.
-    pub fn stream<'a>(&'a mut self, id: Ref, data: &'a [u8]) -> Stream<'a> {
+    pub fn stream<'a>(&'a mut self, id: Ref, data: &'a [u8]) -> Stream<'a, W> {
         Stream::start(self.indirect(id), data)
     }
 }
@@ -226,57 +226,61 @@ impl<W: Write> Chunk<W> {
 /// Document structure.
 impl<W: Write> Chunk<W> {
     /// Start writing a page tree.
-    pub fn pages(&mut self, id: Ref) -> Pages<'_> {
+    pub fn pages(&mut self, id: Ref) -> Pages<'_, W> {
         self.indirect(id).start()
     }
 
     /// Start writing a page.
-    pub fn page(&mut self, id: Ref) -> Page<'_> {
+    pub fn page(&mut self, id: Ref) -> Page<'_, W> {
         self.indirect(id).start()
     }
 
     /// Start writing an outline.
-    pub fn outline(&mut self, id: Ref) -> Outline<'_> {
+    pub fn outline(&mut self, id: Ref) -> Outline<'_, W> {
         self.indirect(id).start()
     }
 
     /// Start writing an outline item.
-    pub fn outline_item(&mut self, id: Ref) -> OutlineItem<'_> {
+    pub fn outline_item(&mut self, id: Ref) -> OutlineItem<'_, W> {
         self.indirect(id).start()
     }
 
     /// Start writing a destination for use in a name tree.
-    pub fn destination(&mut self, id: Ref) -> Destination<'_> {
+    pub fn destination(&mut self, id: Ref) -> Destination<'_, W> {
         self.indirect(id).start()
     }
 
     /// Start writing a named destination dictionary.
-    pub fn destinations(&mut self, id: Ref) -> TypedDict<'_, Destination<'_>> {
+    pub fn destinations(&mut self, id: Ref) -> TypedDict<'_, Destination<'_, W>, W> {
         self.indirect(id).dict().typed()
     }
 
     /// Start writing a file specification dictionary.
-    pub fn file_spec(&mut self, id: Ref) -> FileSpec<'_> {
+    pub fn file_spec(&mut self, id: Ref) -> FileSpec<'_, W> {
         self.indirect(id).start()
     }
 
     /// Start writing an embedded file stream.
-    pub fn embedded_file<'a>(&'a mut self, id: Ref, bytes: &'a [u8]) -> EmbeddedFile<'a> {
+    pub fn embedded_file<'a>(
+        &'a mut self,
+        id: Ref,
+        bytes: &'a [u8],
+    ) -> EmbeddedFile<'a, W> {
         EmbeddedFile::start(self.stream(id, bytes))
     }
 
     /// Start writing a structure tree element.
-    pub fn struct_element(&mut self, id: Ref) -> StructElement<'_> {
+    pub fn struct_element(&mut self, id: Ref) -> StructElement<'_, W> {
         self.indirect(id).start()
     }
 
     /// Start writing a namespace dictionary. PDF 2.0+
-    pub fn namespace(&mut self, id: Ref) -> Namespace<'_> {
+    pub fn namespace(&mut self, id: Ref) -> Namespace<'_, W> {
         self.indirect(id).start()
     }
 
     /// Start writing a metadata stream.
-    pub fn metadata<'a>(&'a mut self, id: Ref, bytes: &'a [u8]) -> Metadata<'a> {
+    pub fn metadata<'a>(&'a mut self, id: Ref, bytes: &'a [u8]) -> Metadata<'a, W> {
         Metadata::start(self.stream(id, bytes))
     }
 }
@@ -291,7 +295,7 @@ impl<W: Write> Chunk<W> {
         &'a mut self,
         id: Ref,
         samples: &'a [u8],
-    ) -> ImageXObject<'a> {
+    ) -> ImageXObject<'a, W> {
         ImageXObject::start(self.stream(id, samples))
     }
 
@@ -304,12 +308,16 @@ impl<W: Write> Chunk<W> {
     /// file.
     ///
     /// You can create the content bytes using a [`Content`] builder.
-    pub fn form_xobject<'a>(&'a mut self, id: Ref, content: &'a [u8]) -> FormXObject<'a> {
+    pub fn form_xobject<'a>(
+        &'a mut self,
+        id: Ref,
+        content: &'a [u8],
+    ) -> FormXObject<'a, W> {
         FormXObject::start(self.stream(id, content))
     }
 
     /// Start writing an external graphics state dictionary.
-    pub fn ext_graphics(&mut self, id: Ref) -> ExtGraphicsState<'_> {
+    pub fn ext_graphics(&mut self, id: Ref) -> ExtGraphicsState<'_, W> {
         self.indirect(id).start()
     }
 }
@@ -317,27 +325,27 @@ impl<W: Write> Chunk<W> {
 /// Fonts.
 impl<W: Write> Chunk<W> {
     /// Start writing a Type-1 font.
-    pub fn type1_font(&mut self, id: Ref) -> Type1Font<'_> {
+    pub fn type1_font(&mut self, id: Ref) -> Type1Font<'_, W> {
         self.indirect(id).start()
     }
 
     /// Start writing a Type-3 font.
-    pub fn type3_font(&mut self, id: Ref) -> Type3Font<'_> {
+    pub fn type3_font(&mut self, id: Ref) -> Type3Font<'_, W> {
         self.indirect(id).start()
     }
 
     /// Start writing a Type-0 font.
-    pub fn type0_font(&mut self, id: Ref) -> Type0Font<'_> {
+    pub fn type0_font(&mut self, id: Ref) -> Type0Font<'_, W> {
         self.indirect(id).start()
     }
 
     /// Start writing a CID font.
-    pub fn cid_font(&mut self, id: Ref) -> CidFont<'_> {
+    pub fn cid_font(&mut self, id: Ref) -> CidFont<'_, W> {
         self.indirect(id).start()
     }
 
     /// Start writing a font descriptor.
-    pub fn font_descriptor(&mut self, id: Ref) -> FontDescriptor<'_> {
+    pub fn font_descriptor(&mut self, id: Ref) -> FontDescriptor<'_, W> {
         self.indirect(id).start()
     }
 
@@ -345,7 +353,7 @@ impl<W: Write> Chunk<W> {
     ///
     /// If you want to use this for a `/ToUnicode` CMap, you can create the
     /// bytes using a [`UnicodeCmap`](types::UnicodeCmap) builder.
-    pub fn cmap<'a>(&'a mut self, id: Ref, cmap: &'a [u8]) -> Cmap<'a> {
+    pub fn cmap<'a>(&'a mut self, id: Ref, cmap: &'a [u8]) -> Cmap<'a, W> {
         Cmap::start(self.stream(id, cmap))
     }
 }
@@ -353,12 +361,12 @@ impl<W: Write> Chunk<W> {
 /// Color spaces, shadings and patterns.
 impl<W: Write> Chunk<W> {
     /// Start writing a color space.
-    pub fn color_space(&mut self, id: Ref) -> ColorSpace<'_> {
+    pub fn color_space(&mut self, id: Ref) -> ColorSpace<'_, W> {
         self.indirect(id).start()
     }
 
     /// Start writing a function-based shading (type 1-3).
-    pub fn function_shading(&mut self, id: Ref) -> FunctionShading<'_> {
+    pub fn function_shading(&mut self, id: Ref) -> FunctionShading<'_, W> {
         self.indirect(id).start()
     }
 
@@ -367,7 +375,7 @@ impl<W: Write> Chunk<W> {
         &'a mut self,
         id: Ref,
         content: &'a [u8],
-    ) -> StreamShading<'a> {
+    ) -> StreamShading<'a, W> {
         StreamShading::start(self.stream(id, content))
     }
 
@@ -378,12 +386,12 @@ impl<W: Write> Chunk<W> {
         &'a mut self,
         id: Ref,
         content: &'a [u8],
-    ) -> TilingPattern<'a> {
+    ) -> TilingPattern<'a, W> {
         TilingPattern::start_with_stream(self.stream(id, content))
     }
 
     /// Start writing a shading pattern.
-    pub fn shading_pattern(&mut self, id: Ref) -> ShadingPattern<'_> {
+    pub fn shading_pattern(&mut self, id: Ref) -> ShadingPattern<'_, W> {
         self.indirect(id).start()
     }
 
@@ -393,7 +401,11 @@ impl<W: Write> Chunk<W> {
     /// ICC.1:2004-10 (PDF 1.7), ICC.1:2003-09 (PDF 1.6), ICC.1:2001-12 (PDF 1.5),
     /// ICC.1:1999-04 (PDF 1.4), or ICC 3.3 (PDF 1.3). Profile data is commonly
     /// compressed using the `FlateDecode` filter.
-    pub fn icc_profile<'a>(&'a mut self, id: Ref, profile: &'a [u8]) -> IccProfile<'a> {
+    pub fn icc_profile<'a>(
+        &'a mut self,
+        id: Ref,
+        profile: &'a [u8],
+    ) -> IccProfile<'a, W> {
         IccProfile::start(self.stream(id, profile))
     }
 }
@@ -405,17 +417,17 @@ impl<W: Write> Chunk<W> {
         &'a mut self,
         id: Ref,
         samples: &'a [u8],
-    ) -> SampledFunction<'a> {
+    ) -> SampledFunction<'a, W> {
         SampledFunction::start(self.stream(id, samples))
     }
 
     /// Start writing an exponential function.
-    pub fn exponential_function(&mut self, id: Ref) -> ExponentialFunction<'_> {
+    pub fn exponential_function(&mut self, id: Ref) -> ExponentialFunction<'_, W> {
         self.indirect(id).start()
     }
 
     /// Start writing a stitching function.
-    pub fn stitching_function(&mut self, id: Ref) -> StitchingFunction<'_> {
+    pub fn stitching_function(&mut self, id: Ref) -> StitchingFunction<'_, W> {
         self.indirect(id).start()
     }
 
@@ -426,7 +438,7 @@ impl<W: Write> Chunk<W> {
         &'a mut self,
         id: Ref,
         code: &'a [u8],
-    ) -> PostScriptFunction<'a> {
+    ) -> PostScriptFunction<'a, W> {
         PostScriptFunction::start(self.stream(id, code))
     }
 }
@@ -434,12 +446,12 @@ impl<W: Write> Chunk<W> {
 /// Tree data structures.
 impl<W: Write> Chunk<W> {
     /// Start writing a name tree node.
-    pub fn name_tree<T: Primitive>(&mut self, id: Ref) -> NameTree<'_, T> {
+    pub fn name_tree<T: Primitive>(&mut self, id: Ref) -> NameTree<'_, T, W> {
         self.indirect(id).start()
     }
 
     /// Start writing a number tree node.
-    pub fn number_tree<T: Primitive>(&mut self, id: Ref) -> NumberTree<'_, T> {
+    pub fn number_tree<T: Primitive>(&mut self, id: Ref) -> NumberTree<'_, T, W> {
         self.indirect(id).start()
     }
 }
@@ -447,22 +459,22 @@ impl<W: Write> Chunk<W> {
 /// Interactive features.
 impl<W: Write> Chunk<W> {
     /// Start writing an annotation dictionary.
-    pub fn annotation(&mut self, id: Ref) -> Annotation<'_> {
+    pub fn annotation(&mut self, id: Ref) -> Annotation<'_, W> {
         self.indirect(id).start()
     }
 
     /// Start writing a form field dictionary.
-    pub fn form_field(&mut self, id: Ref) -> Field<'_> {
+    pub fn form_field(&mut self, id: Ref) -> Field<'_, W> {
         self.indirect(id).start()
     }
 
     /// Start writing a signature field lock dictionary.
-    pub fn signature_field_lock(&mut self, id: Ref) -> SignatureFieldLock<'_> {
+    pub fn signature_field_lock(&mut self, id: Ref) -> SignatureFieldLock<'_, W> {
         self.indirect(id).start()
     }
 
     /// Start writing a seed value dictionary.
-    pub fn signature_seed_value(&mut self, id: Ref) -> SignatureSeedValue<'_> {
+    pub fn signature_seed_value(&mut self, id: Ref) -> SignatureSeedValue<'_, W> {
         self.indirect(id).start()
     }
 }

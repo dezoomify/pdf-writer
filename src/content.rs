@@ -3,9 +3,9 @@ use crate::chunk::Settings;
 use crate::object::{is_delimiter_character, TextStrLike};
 
 /// A builder for a content stream.
-#[must_use = "call finish to check for I/O errors"]
+#[must_use = "call finish to check for I/W errors"]
 pub struct Content<W: Write> {
-    output: Sink<W>,
+    output: Output<W>,
     settings: Settings,
     q_depth: usize,
 }
@@ -19,7 +19,7 @@ impl<W: Write> Content<W> {
 
     /// Create a content stream with the given formatting settings.
     pub fn with_settings(writer: W, settings: Settings) -> Self {
-        Self { output: Sink::new(writer), settings, q_depth: 0 }
+        Self { output: Output::new(writer), settings, q_depth: 0 }
     }
 
     /// The number of bytes successfully written so far.
@@ -41,8 +41,8 @@ impl<W: Write> Content<W> {
 
     /// Start writing an arbitrary operation.
     #[inline]
-    pub fn op<'a>(&'a mut self, operator: &'a str) -> Operation<'a> {
-        Operation::start(self.output.as_output(), operator, self.settings)
+    pub fn op<'a>(&'a mut self, operator: &'a str) -> Operation<'a, W> {
+        Operation::start(&mut self.output, operator, self.settings)
     }
 
     /// Check for serialization errors, flush, and return the destination.
@@ -54,17 +54,17 @@ impl<W: Write> Content<W> {
 /// Writer for an _operation_ in a content stream.
 ///
 /// This struct is created by [`Content::op`].
-pub struct Operation<'a> {
-    output: &'a mut Output<'a>,
+pub struct Operation<'a, W: Write + ?Sized> {
+    output: &'a mut Output<W>,
     op: &'a str,
     first: bool,
     settings: Settings,
 }
 
-impl<'a> Operation<'a> {
+impl<'a, W: Write + ?Sized> Operation<'a, W> {
     #[inline]
     pub(crate) fn start(
-        output: &'a mut Output<'a>,
+        output: &'a mut Output<W>,
         op: &'a str,
         settings: Settings,
     ) -> Self {
@@ -93,7 +93,7 @@ impl<'a> Operation<'a> {
 
     /// Start writing an arbitrary object operand.
     #[inline]
-    pub fn obj(&mut self) -> Obj<'_> {
+    pub fn obj(&mut self) -> Obj<'_, W> {
         // In case we are writing the first object, we want a newline to
         // separate it from previous operations (looks nicer). Otherwise, a
         // space is sufficient.
@@ -117,7 +117,7 @@ impl<'a> Operation<'a> {
     }
 }
 
-impl Drop for Operation<'_> {
+impl<W: Write + ?Sized> Drop for Operation<'_, W> {
     #[inline]
     fn drop(&mut self) {
         let pad_byte = if self.first { b'\n' } else { b' ' };
@@ -644,7 +644,7 @@ impl<W: Write> Content<W> {
 
     /// `TJ`: Start showing text with individual glyph positioning.
     #[inline]
-    pub fn show_positioned(&mut self) -> ShowPositioned<'_> {
+    pub fn show_positioned(&mut self) -> ShowPositioned<'_, W> {
         ShowPositioned::start(self.op("TJ"))
     }
 }
@@ -652,35 +652,35 @@ impl<W: Write> Content<W> {
 /// Writer for an _individual glyph positioning operation_.
 ///
 /// This struct is created by [`Content::show_positioned`].
-pub struct ShowPositioned<'a> {
-    op: Operation<'a>,
+pub struct ShowPositioned<'a, W: Write + ?Sized> {
+    op: Operation<'a, W>,
 }
 
-impl<'a> ShowPositioned<'a> {
+impl<'a, W: Write + ?Sized> ShowPositioned<'a, W> {
     #[inline]
-    pub(crate) fn start(op: Operation<'a>) -> Self {
+    pub(crate) fn start(op: Operation<'a, W>) -> Self {
         Self { op }
     }
 
     /// Start writing the array of strings and adjustments. Required.
     #[inline]
-    pub fn items(&mut self) -> PositionedItems<'_> {
+    pub fn items(&mut self) -> PositionedItems<'_, W> {
         PositionedItems::start(self.op.obj())
     }
 }
 
-deref!('a, ShowPositioned<'a> => Operation<'a>, op);
+deref!('a, W,ShowPositioned<'a, W> => Operation<'a, W>, op);
 
 /// Writer for a _positioned items array_.
 ///
 /// This struct is created by [`ShowPositioned::items`].
-pub struct PositionedItems<'a> {
-    array: Array<'a>,
+pub struct PositionedItems<'a, W: Write + ?Sized> {
+    array: Array<'a, W>,
 }
 
-impl<'a> PositionedItems<'a> {
+impl<'a, W: Write + ?Sized> PositionedItems<'a, W> {
     #[inline]
-    pub(crate) fn start(obj: Obj<'a>) -> Self {
+    pub(crate) fn start(obj: Obj<'a, W>) -> Self {
         Self { array: obj.array() }
     }
 
@@ -704,7 +704,7 @@ impl<'a> PositionedItems<'a> {
     }
 }
 
-deref!('a, PositionedItems<'a> => Array<'a>, array);
+deref!('a, W,PositionedItems<'a, W> => Array<'a, W>, array);
 
 /// Type 3 fonts.
 ///
@@ -953,7 +953,10 @@ impl<W: Write> Content<W> {
 
     /// `DP`: Start writing a marked-content point operation. PDF 1.2+.
     #[inline]
-    pub fn marked_content_point_with_properties(&mut self, tag: Name) -> MarkContent<'_> {
+    pub fn marked_content_point_with_properties(
+        &mut self,
+        tag: Name,
+    ) -> MarkContent<'_, W> {
         let mut op = self.op("DP");
         op.operand(tag);
         MarkContent::start(op)
@@ -968,7 +971,10 @@ impl<W: Write> Content<W> {
 
     /// `BDC`: Start writing a "begin marked content" operation. PDF 1.2+.
     #[inline]
-    pub fn begin_marked_content_with_properties(&mut self, tag: Name) -> MarkContent<'_> {
+    pub fn begin_marked_content_with_properties(
+        &mut self,
+        tag: Name,
+    ) -> MarkContent<'_, W> {
         let mut op = self.op("BDC");
         op.operand(tag);
         MarkContent::start(op)
@@ -983,20 +989,20 @@ impl<W: Write> Content<W> {
 }
 
 /// Writer for a _begin marked content operation_. PDF 1.3+.
-pub struct MarkContent<'a> {
-    op: Operation<'a>,
+pub struct MarkContent<'a, W: Write + ?Sized> {
+    op: Operation<'a, W>,
 }
 
-impl<'a> MarkContent<'a> {
+impl<'a, W: Write + ?Sized> MarkContent<'a, W> {
     #[inline]
-    pub(crate) fn start(op: Operation<'a>) -> Self {
+    pub(crate) fn start(op: Operation<'a, W>) -> Self {
         Self { op }
     }
 
     /// Start writing this marked content's property list. Mutually exclusive
     /// with [`properties_named`](Self::properties_named).
     #[inline]
-    pub fn properties(&mut self) -> PropertyList<'_> {
+    pub fn properties(&mut self) -> PropertyList<'_, W> {
         self.op.obj().start()
     }
 
@@ -1009,17 +1015,17 @@ impl<'a> MarkContent<'a> {
     }
 }
 
-deref!('a, MarkContent<'a> => Operation<'a>, op);
+deref!('a, W,MarkContent<'a, W> => Operation<'a, W>, op);
 
 /// Writer for _property list dictionary_. Can be used as a generic dictionary.
 /// PDF 1.3+.
-pub struct PropertyList<'a> {
-    dict: Dict<'a>,
+pub struct PropertyList<'a, W: Write + ?Sized> {
+    dict: Dict<'a, W>,
 }
 
 writer!(PropertyList: |obj| Self { dict: obj.dict() });
 
-impl<'a> PropertyList<'a> {
+impl<'a, W: Write + ?Sized> PropertyList<'a, W> {
     /// Write the `/MCID` marked content identifier.
     #[inline]
     pub fn identify(&mut self, identifier: i32) -> &mut Self {
@@ -1038,25 +1044,25 @@ impl<'a> PropertyList<'a> {
     /// Start writing artifact property list. The tag of the marked content
     /// operation must have been `/Artifact`. PDF 1.4+.
     #[inline]
-    pub fn artifact(self) -> Artifact<'a> {
+    pub fn artifact(self) -> Artifact<'a, W> {
         Artifact::start_with_dict(self.dict)
     }
 }
 
-deref!('a, PropertyList<'a> => Dict<'a>, dict);
+deref!('a, W,PropertyList<'a, W> => Dict<'a, W>, dict);
 
 /// Writer for an _actifact property list dictionary_. PDF 1.4+.
 ///
 /// Required for marking up pagination artifacts in some PDF/A profiles.
-pub struct Artifact<'a> {
-    dict: Dict<'a>,
+pub struct Artifact<'a, W: Write + ?Sized> {
+    dict: Dict<'a, W>,
 }
 
 writer!(Artifact: |obj| Self::start_with_dict(obj.dict()));
 
-impl<'a> Artifact<'a> {
+impl<'a, W: Write + ?Sized> Artifact<'a, W> {
     #[inline]
-    pub(crate) fn start_with_dict(dict: Dict<'a>) -> Self {
+    pub(crate) fn start_with_dict(dict: Dict<'a, W>) -> Self {
         Self { dict }
     }
 
@@ -1100,7 +1106,7 @@ impl<'a> Artifact<'a> {
     }
 }
 
-deref!('a, Artifact<'a> => Dict<'a>, dict);
+deref!('a, W,Artifact<'a, W> => Dict<'a, W>, dict);
 
 /// The various types of layout artifacts.
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]
@@ -1210,19 +1216,19 @@ impl<W: Write> Content<W> {
 ///
 /// This struct is created by [`Pages::resources`], [`Page::resources`],
 /// [`FormXObject::resources`], and [`TilingPattern::resources`].
-pub struct Resources<'a> {
-    dict: Dict<'a>,
+pub struct Resources<'a, W: Write + ?Sized> {
+    dict: Dict<'a, W>,
 }
 
 writer!(Resources: |obj| Self { dict: obj.dict() });
 
-impl Resources<'_> {
+impl<W: Write + ?Sized> Resources<'_, W> {
     /// Start writing the `/XObject` dictionary.
     ///
     /// Relevant types:
     /// - [`ImageXObject`]
     /// - [`FormXObject`]
-    pub fn x_objects(&mut self) -> Dict<'_> {
+    pub fn x_objects(&mut self) -> Dict<'_, W> {
         self.insert(Name(b"XObject")).dict()
     }
 
@@ -1232,7 +1238,7 @@ impl Resources<'_> {
     /// - [`Type1Font`]
     /// - [`Type3Font`]
     /// - [`Type0Font`]
-    pub fn fonts(&mut self) -> Dict<'_> {
+    pub fn fonts(&mut self) -> Dict<'_, W> {
         self.insert(Name(b"Font")).dict()
     }
 
@@ -1240,7 +1246,7 @@ impl Resources<'_> {
     ///
     /// Relevant types:
     /// - [`ColorSpace`]
-    pub fn color_spaces(&mut self) -> Dict<'_> {
+    pub fn color_spaces(&mut self) -> Dict<'_, W> {
         self.insert(Name(b"ColorSpace")).dict()
     }
 
@@ -1249,7 +1255,7 @@ impl Resources<'_> {
     /// Relevant types:
     /// - [`TilingPattern`]
     /// - [`ShadingPattern`]
-    pub fn patterns(&mut self) -> Dict<'_> {
+    pub fn patterns(&mut self) -> Dict<'_, W> {
         self.insert(Name(b"Pattern")).dict()
     }
 
@@ -1257,7 +1263,7 @@ impl Resources<'_> {
     ///
     /// Relevant types:
     /// - [`FunctionShading`]
-    pub fn shadings(&mut self) -> Dict<'_> {
+    pub fn shadings(&mut self) -> Dict<'_, W> {
         self.insert(Name(b"Shading")).dict()
     }
 
@@ -1265,7 +1271,7 @@ impl Resources<'_> {
     ///
     /// Relevant types:
     /// - [`ExtGraphicsState`]
-    pub fn ext_g_states(&mut self) -> Dict<'_> {
+    pub fn ext_g_states(&mut self) -> Dict<'_, W> {
         self.insert(Name(b"ExtGState")).dict()
     }
 
@@ -1301,12 +1307,12 @@ impl Resources<'_> {
     /// This allows to write property lists with indirect objects for
     /// marked-content sequences. These properties can be used by property lists
     /// using the [`MarkContent::properties_named`] method. PDF 1.2+.
-    pub fn properties(&mut self) -> TypedDict<'_, PropertyList<'_>> {
+    pub fn properties(&mut self) -> TypedDict<'_, PropertyList<'_, W>, W> {
         self.insert(Name(b"Properties")).dict().typed()
     }
 }
 
-deref!('a, Resources<'a> => Dict<'a>, dict);
+deref!('a, W,Resources<'a, W> => Dict<'a, W>, dict);
 
 /// What procedure sets to send to a PostScript printer or other output device.
 ///
@@ -1342,8 +1348,8 @@ impl ProcSet {
 ///
 /// This struct is created by [`Chunk::ext_graphics`] and
 /// [`ShadingPattern::ext_graphics`].
-pub struct ExtGraphicsState<'a> {
-    dict: Dict<'a>,
+pub struct ExtGraphicsState<'a, W: Write + ?Sized> {
+    dict: Dict<'a, W>,
 }
 
 writer!(ExtGraphicsState: |obj| {
@@ -1352,7 +1358,7 @@ writer!(ExtGraphicsState: |obj| {
     Self { dict }
 });
 
-impl ExtGraphicsState<'_> {
+impl<W: Write + ?Sized> ExtGraphicsState<'_, W> {
     /// Write the `LW` attribute to set the line width. PDF 1.3+.
     pub fn line_width(&mut self, width: f32) -> &mut Self {
         self.pair(Name(b"LW"), width);
@@ -1518,7 +1524,7 @@ impl ExtGraphicsState<'_> {
     /// Start writing the `SMask` attribute. PDF 1.4+.
     ///
     /// Note that this key is forbidden in PDF/A-1.
-    pub fn soft_mask(&mut self) -> SoftMask<'_> {
+    pub fn soft_mask(&mut self) -> SoftMask<'_, W> {
         self.insert(Name(b"SMask")).start()
     }
 
@@ -1562,7 +1568,7 @@ impl ExtGraphicsState<'_> {
     }
 }
 
-deref!('a, ExtGraphicsState<'a> => Dict<'a>, dict);
+deref!('a, W,ExtGraphicsState<'a, W> => Dict<'a, W>, dict);
 
 /// How to blend source and backdrop.
 #[derive(Debug, Copy, Clone, Default, Eq, PartialEq, Hash)]
@@ -1638,8 +1644,8 @@ impl OverprintMode {
 /// Writer for a _soft mask dictionary_.
 ///
 /// This struct is created by [`ExtGraphicsState::soft_mask`].
-pub struct SoftMask<'a> {
-    dict: Dict<'a>,
+pub struct SoftMask<'a, W: Write + ?Sized> {
+    dict: Dict<'a, W>,
 }
 
 writer!(SoftMask: |obj| {
@@ -1648,7 +1654,7 @@ writer!(SoftMask: |obj| {
     Self { dict }
 });
 
-impl SoftMask<'_> {
+impl<W: Write + ?Sized> SoftMask<'_, W> {
     /// Write the `S` attribute to set the soft mask subtype. Required.
     pub fn subtype(&mut self, subtype: MaskType) -> &mut Self {
         self.pair(Name(b"S"), subtype.to_name());
@@ -1679,7 +1685,7 @@ impl SoftMask<'_> {
     }
 }
 
-deref!('a, SoftMask<'a> => Dict<'a>, dict);
+deref!('a, W,SoftMask<'a, W> => Dict<'a, W>, dict);
 
 /// What property in the mask influences the target alpha.
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]

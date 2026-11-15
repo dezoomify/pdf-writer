@@ -4,8 +4,8 @@ use crate::object::TextStrLike;
 /// Writer for an _annotation dictionary_.
 ///
 /// An array of this struct is created by [`Chunk::annotation`].
-pub struct Annotation<'a> {
-    pub(crate) dict: Dict<'a>,
+pub struct Annotation<'a, W: Write + ?Sized> {
+    pub(crate) dict: Dict<'a, W>,
 }
 
 writer!(Annotation: |obj| {
@@ -14,7 +14,7 @@ writer!(Annotation: |obj| {
     Self { dict }
 });
 
-impl Annotation<'_> {
+impl<W: Write + ?Sized> Annotation<'_, W> {
     /// Write the `/Subtype` attribute to tell the viewer the type of this
     /// particular annotation.
     pub fn subtype(&mut self, kind: AnnotationType) -> &mut Self {
@@ -71,7 +71,7 @@ impl Annotation<'_> {
     /// [`Self::appearance_state`] must be set. PDF 1.2+.
     ///
     /// Required for many annotations in PDF/A.
-    pub fn appearance(&mut self) -> Appearance<'_> {
+    pub fn appearance(&mut self) -> Appearance<'_, W> {
         self.insert(Name(b"AP")).start()
     }
 
@@ -111,7 +111,7 @@ impl Annotation<'_> {
 
     /// Start writing the `/BS` attribute. These are some more elaborate border
     /// settings taking precedence over `/B` for some annotation types. PDF 1.2+.
-    pub fn border_style(&mut self) -> BorderStyle<'_> {
+    pub fn border_style(&mut self) -> BorderStyle<'_, W> {
         self.insert(Name(b"BS")).start()
     }
 
@@ -154,7 +154,7 @@ impl Annotation<'_> {
     /// `Link` and `Widget`.
     ///
     /// Note that this attribute is forbidden in PDF/A.
-    pub fn action(&mut self) -> Action<'_> {
+    pub fn action(&mut self) -> Action<'_, W> {
         self.insert(Name(b"A")).start()
     }
 
@@ -162,7 +162,7 @@ impl Annotation<'_> {
     /// `Widget`. PDF 1.3+.
     ///
     /// Note that this attribute is forbidden in PDF/A.
-    pub fn additional_actions(&mut self) -> AdditionalActions<'_> {
+    pub fn additional_actions(&mut self) -> AdditionalActions<'_, W> {
         self.insert(Name(b"AA")).start()
     }
 
@@ -206,7 +206,7 @@ impl Annotation<'_> {
     }
 
     /// Start writing the `/FS` attribute, setting which file to reference.
-    pub fn file_spec(&mut self) -> FileSpec<'_> {
+    pub fn file_spec(&mut self) -> FileSpec<'_, W> {
         self.insert(Name(b"FS")).start()
     }
 
@@ -219,7 +219,7 @@ impl Annotation<'_> {
 
     /// Start writing the `/MK` dictionary. Only permissible for the subtype
     /// `Widget`.
-    pub fn appearance_characteristics(&mut self) -> AppearanceCharacteristics<'_> {
+    pub fn appearance_characteristics(&mut self) -> AppearanceCharacteristics<'_, W> {
         self.insert(Name(b"MK")).start()
     }
 
@@ -232,12 +232,12 @@ impl Annotation<'_> {
 
     /// Start writing the `/AF` array to specify the associated files of the
     /// annotation. PDF 2.0+ or PDF/A-3.
-    pub fn associated_files(&mut self) -> TypedArray<'_, FileSpec<'_>> {
+    pub fn associated_files(&mut self) -> TypedArray<'_, FileSpec<'_, W>, W> {
         self.insert(Name(b"AF")).array().typed()
     }
 }
 
-deref!('a, Annotation<'a> => Dict<'a>, dict);
+deref!('a, W,Annotation<'a, W> => Dict<'a, W>, dict);
 
 /// Kind of the annotation to produce.
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]
@@ -393,13 +393,13 @@ bitflags::bitflags! {
 /// Writer for an _appearance characteristics dictionary_.
 ///
 /// This struct is created by [`Annotation::appearance_characteristics`].
-pub struct AppearanceCharacteristics<'a> {
-    dict: Dict<'a>,
+pub struct AppearanceCharacteristics<'a, W: Write + ?Sized> {
+    dict: Dict<'a, W>,
 }
 
 writer!(AppearanceCharacteristics: |obj| Self { dict: obj.dict() });
 
-impl AppearanceCharacteristics<'_> {
+impl<W: Write + ?Sized> AppearanceCharacteristics<'_, W> {
     /// Write the `/R` attribute. This is the number of degrees the widget
     /// annotation should be rotated by counterclockwise relative to its page
     /// when displayed. This should be a multiple of 90.
@@ -515,7 +515,7 @@ impl AppearanceCharacteristics<'_> {
 
     /// Start writing the `/IF` dictonary. This sets the widget annotation's
     /// icon display characteristics. Only permissible for push button fields.
-    pub fn icon_fit(&mut self) -> IconFit<'_> {
+    pub fn icon_fit(&mut self) -> IconFit<'_, W> {
         self.insert(Name(b"IF")).start()
     }
 
@@ -528,7 +528,7 @@ impl AppearanceCharacteristics<'_> {
     }
 }
 
-deref!('a, AppearanceCharacteristics<'a> => Dict<'a>, dict);
+deref!('a, W,AppearanceCharacteristics<'a, W> => Dict<'a, W>, dict);
 
 /// The position the text of the widget annotation's caption relative to its
 /// icon.
@@ -554,13 +554,13 @@ pub enum TextPosition {
 /// Writer for an _icon fit dictionary_.
 ///
 /// This struct is created by [`AppearanceCharacteristics::icon_fit`].
-pub struct IconFit<'a> {
-    dict: Dict<'a>,
+pub struct IconFit<'a, W: Write + ?Sized> {
+    dict: Dict<'a, W>,
 }
 
 writer!(IconFit: |obj| Self { dict: obj.dict() });
 
-impl IconFit<'_> {
+impl<W: Write + ?Sized> IconFit<'_, W> {
     /// Write the `/SW` attribute. This sets under which circumstances the icon
     /// of the widget annotation should be scaled.
     pub fn scale(&mut self, value: IconScale) -> &mut Self {
@@ -591,7 +591,7 @@ impl IconFit<'_> {
     }
 }
 
-deref!('a, IconFit<'a> => Dict<'a>, dict);
+deref!('a, W,IconFit<'a, W> => Dict<'a, W>, dict);
 
 /// How the icon in a push button field should be scaled.
 #[derive(Debug, Copy, Clone, Default, Eq, PartialEq, Hash)]
@@ -664,7 +664,7 @@ impl HighlightEffect {
         match self {
             Self::None => Name(b"N"),
             Self::Invert => Name(b"I"),
-            Self::Outline => Name(b"O"),
+            Self::Outline => Name(b"W"),
             Self::Push => Name(b"P"),
         }
     }
@@ -673,45 +673,45 @@ impl HighlightEffect {
 /// Writer for an _appearance dictionary_.
 ///
 /// This struct is created by [`Annotation::appearance`].
-pub struct Appearance<'a> {
-    dict: Dict<'a>,
+pub struct Appearance<'a, W: Write + ?Sized> {
+    dict: Dict<'a, W>,
 }
 
 writer!(Appearance: |obj| Self { dict: obj.dict() });
 
-impl Appearance<'_> {
+impl<W: Write + ?Sized> Appearance<'_, W> {
     /// Start writing the `/N` stream or dictionary to set the annotation's
     /// normal appearance.
-    pub fn normal(&mut self) -> AppearanceEntry<'_> {
+    pub fn normal(&mut self) -> AppearanceEntry<'_, W> {
         self.insert(Name(b"N")).start()
     }
 
     /// Start writing the `/R` stream or dictionary to set the annotation's
     /// rollover (hover) appearance.
-    pub fn rollover(&mut self) -> AppearanceEntry<'_> {
+    pub fn rollover(&mut self) -> AppearanceEntry<'_, W> {
         self.insert(Name(b"R")).start()
     }
 
     /// Start writing the `/D` stream or dictionary to set the annotation's
     /// alternate (down) appearance.
-    pub fn alternate(&mut self) -> AppearanceEntry<'_> {
+    pub fn alternate(&mut self) -> AppearanceEntry<'_, W> {
         self.insert(Name(b"D")).start()
     }
 }
 
-deref!('a, Appearance<'a> => Dict<'a>, dict);
+deref!('a, W,Appearance<'a, W> => Dict<'a, W>, dict);
 
 /// Writer for an _appearance stream_ or an _appearance subdictionary_.
 ///
 /// This struct is created by [`Appearance::normal`], [`Appearance::rollover`]
 /// and [`Appearance::alternate`].
-pub struct AppearanceEntry<'a> {
-    obj: Obj<'a>,
+pub struct AppearanceEntry<'a, W: Write + ?Sized> {
+    obj: Obj<'a, W>,
 }
 
 writer!(AppearanceEntry: |obj| Self { obj });
 
-impl<'a> AppearanceEntry<'a> {
+impl<'a, W: Write + ?Sized> AppearanceEntry<'a, W> {
     /// Write an indirect reference to a [`FormXObject`] containing the
     /// appearance stream.
     pub fn stream(self, id: Ref) {
@@ -720,18 +720,18 @@ impl<'a> AppearanceEntry<'a> {
 
     /// Start writing an appearance subdictionary containing indirect references
     /// to [`FormXObject`]s for each appearance state.
-    pub fn streams(self) -> TypedDict<'a, Ref> {
+    pub fn streams(self) -> TypedDict<'a, Ref, W> {
         self.obj.dict().typed()
     }
 }
 
-deref!('a, AppearanceEntry<'a> => Obj<'a>, obj);
+deref!('a, W,AppearanceEntry<'a, W> => Obj<'a, W>, obj);
 
 /// Writer for an _border style dictionary_.
 ///
 /// This struct is created by [`Annotation::border_style`].
-pub struct BorderStyle<'a> {
-    dict: Dict<'a>,
+pub struct BorderStyle<'a, W: Write + ?Sized> {
+    dict: Dict<'a, W>,
 }
 
 writer!(BorderStyle: |obj| {
@@ -740,7 +740,7 @@ writer!(BorderStyle: |obj| {
     Self { dict }
 });
 
-impl BorderStyle<'_> {
+impl<W: Write + ?Sized> BorderStyle<'_, W> {
     /// Write the `/W` attribute. This is the width of the border in points.
     pub fn width(&mut self, points: f32) -> &mut Self {
         self.pair(Name(b"W"), points);
@@ -761,7 +761,7 @@ impl BorderStyle<'_> {
     }
 }
 
-deref!('a, BorderStyle<'a> => Dict<'a>, dict);
+deref!('a, W,BorderStyle<'a, W> => Dict<'a, W>, dict);
 
 /// The kind of line to draw on the border.
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]
