@@ -335,45 +335,51 @@ pub enum PostScriptOp<'a> {
 }
 
 impl PostScriptOp<'_> {
-    /// Encode a slice of operations into a byte stream.
-    pub fn encode(ops: &[Self]) -> Buf {
-        let mut buf = Buf::new();
-        Self::write_slice(ops, &mut buf);
-        buf
+    /// Encode operations into the supplied destination and return their limits.
+    ///
+    /// The destination is flushed before returning. No byte buffer is allocated.
+    pub fn encode<W: Write + ?Sized>(ops: &[Self], writer: &mut W) -> io::Result<Limits> {
+        let mut output = Sink::new(writer);
+        Self::write_slice(ops, output.as_output());
+        let limits = output.limits().clone();
+        output.finish()?;
+        Ok(limits)
     }
 
-    fn write_slice(ops: &[Self], buf: &mut Buf) {
-        buf.push(b'{');
+    fn write_slice(ops: &[Self], output: &mut Output<'_>) {
+        output.push(b'{');
         if ops.len() > 1 {
-            buf.push(b' ');
+            output.push(b' ');
         }
-        for op in ops {
-            op.write(buf);
-            buf.push(b' ');
+        for (index, op) in ops.iter().enumerate() {
+            if index > 0 {
+                output.push(b' ');
+            }
+            op.write(output);
         }
-        if ops.len() == 1 {
-            buf.inner.pop();
+        if ops.len() > 1 {
+            output.push(b' ');
         }
-        buf.push(b'}');
+        output.push(b'}');
     }
 
-    fn write(&self, buf: &mut Buf) {
+    fn write(&self, output: &mut Output<'_>) {
         match *self {
-            Self::Real(r) => buf.push_decimal(r),
-            Self::Integer(i) => buf.push_val(i),
+            Self::Real(r) => output.push_decimal(r),
+            Self::Integer(i) => output.push_val(i),
             Self::If(ops) => {
-                Self::write_slice(ops, buf);
-                buf.push(b' ');
-                buf.extend(self.operator());
+                Self::write_slice(ops, output);
+                output.push(b' ');
+                output.extend(self.operator());
             }
             Self::IfElse(ops1, ops2) => {
-                Self::write_slice(ops1, buf);
-                buf.push(b' ');
-                Self::write_slice(ops2, buf);
-                buf.push(b' ');
-                buf.extend(self.operator());
+                Self::write_slice(ops1, output);
+                output.push(b' ');
+                Self::write_slice(ops2, output);
+                output.push(b' ');
+                output.extend(self.operator());
             }
-            _ => buf.extend(self.operator()),
+            _ => output.extend(self.operator()),
         }
     }
 
@@ -446,8 +452,10 @@ mod tests {
             Add,
         ];
 
+        let mut bytes = Vec::new();
+        PostScriptOp::encode(&ops, &mut bytes).unwrap();
         assert_eq!(
-            PostScriptOp::encode(&ops).as_slice(),
+            bytes,
             b"{ 3.0 2.0 mul exch dup 0.0 ge { 1.0 add } {neg} ifelse add }"
         );
     }

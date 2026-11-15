@@ -1,16 +1,19 @@
 /*!
 A step-by-step PDF writer.
 
-The entry point into the API is the [`Pdf`] struct, which constructs the
-document into one big internal buffer. The top-level writer has many methods to
-create specialized writers for specific PDF objects. These all follow the same
-general pattern: They borrow the main buffer mutably, expose a builder pattern
-for writing individual fields in a strongly typed fashion and finish up the
-object when dropped.
+The entry point is `Pdf<W>`, which writes to any destination implementing
+`std::io::Write`: a `Vec<u8>`, a file, or a caller-defined writer. Use
+`std::io::BufWriter` for efficient file output. Specialized object writers borrow
+the destination, expose strongly typed builder methods, and close their objects
+when dropped.
 
-There are a few more top-level structs with internal buffers, like the
-[`Content`] stream builder and the [`Chunk`], but wherever possible buffers
-are borrowed from parent writers to minimize allocations.
+Always call `Pdf::finish()` to write the cross-reference information and trailer,
+flush the destination, and check for I/O errors. Errors from object builders,
+including their destructors, are retained until this call. `finish()` returns the
+destination on success. Passing `&mut destination` keeps ownership with the caller.
+
+`Content`, `Chunk`, and `UnicodeCmap` also take caller-supplied destinations.
+Serialization limits are available separately through their `limits()` methods.
 
 # Writers
 The writers contained is this crate fall roughly into two categories.
@@ -51,7 +54,8 @@ let page_tree_id = Ref::new(2);
 let page_id = Ref::new(3);
 
 // Write a document catalog and a page tree with one A4 page that uses no resources.
-let mut pdf = Pdf::new();
+let file = std::fs::File::create("target/empty.pdf")?;
+let mut pdf = Pdf::new(std::io::BufWriter::new(file));
 pdf.catalog(catalog_id).pages(page_tree_id);
 pdf.pages(page_tree_id).kids([page_id]).count(1);
 pdf.page(page_id)
@@ -59,8 +63,8 @@ pdf.page(page_id)
     .media_box(Rect::new(0.0, 0.0, 595.0, 842.0))
     .resources();
 
-// Finish with cross-reference table and trailer and write to file.
-std::fs::write("target/empty.pdf", pdf.finish())?;
+// Write the cross-reference table and trailer, then flush the destination.
+pdf.finish()?;
 # Ok(())
 # }
 ```
@@ -89,7 +93,6 @@ mod macros;
 mod actions;
 mod annotations;
 mod attributes;
-mod buf;
 mod chunk;
 mod color;
 mod content;
@@ -97,7 +100,9 @@ mod files;
 mod font;
 mod forms;
 mod functions;
+mod limits;
 mod object;
+mod output;
 mod renditions;
 mod renumber;
 mod structure;
@@ -196,85 +201,87 @@ pub mod types {
     pub use xobject::SMaskInData;
 }
 
-pub use self::buf::{Buf, Limits};
 pub use self::chunk::{Chunk, Settings};
 pub use self::content::Content;
+pub use self::limits::Limits;
 pub use self::object::{
     Array, Date, Dict, Filter, Finish, LanguageIdentifier, Name, Null, Obj, Primitive,
     Rect, Ref, Rewrite, Str, Stream, TextStr, TextStrLike, TextStrWithLang, TypedArray,
     TypedDict, Writer,
 };
+use self::output::{Output, Sink};
 
-use std::fmt::{self, Debug, Formatter};
-use std::io::Write;
+use std::fmt::{self, Debug, Formatter, Write as _};
+use std::io::{self, Write};
 use std::ops::{Deref, DerefMut};
 
 use self::writers::*;
 
 /// A builder for a PDF file.
 ///
-/// This type constructs a PDF file in-memory. Aside from a few specific
-/// structures, a PDF file mostly consists of indirect objects. For more
+/// This type writes a PDF file to a caller-supplied destination. A PDF file
+/// mostly consists of indirect objects. For more
 /// flexibility, you can write these objects either directly into a [`Pdf`] or
 /// into a [`Chunk`], which you can add to the [`Pdf`] (or another chunk) later.
 /// Therefore, most writing methods are exposed on the chunk type, which this
 /// type dereferences to.
-pub struct Pdf {
-    chunk: Chunk,
+#[must_use = "call finish to write the trailer and check for I/O errors"]
+pub struct Pdf<W: Write> {
+    chunk: Chunk<W>,
     trailer_data: TrailerData,
 }
 
-impl Pdf {
-    /// Create a new PDF with the default settings and buffer capacity
-    /// (currently 8 KB).
-    #[allow(clippy::new_without_default)]
-    pub fn new() -> Self {
-        Self::with_settings(Settings::default())
+/// Options applied before the PDF header is written.
+#[derive(Debug, Clone, Copy)]
+pub struct PdfOptions {
+    /// Formatting settings for PDF objects.
+    pub settings: Settings,
+    /// PDF header version. Each component must be a single digit. Defaults to 1.7.
+    pub version: (u8, u8),
+    /// Four bytes identifying the file as binary. Defaults to `[0x80; 4]`.
+    /// Use ASCII bytes for ASCII output.
+    pub binary_marker: [u8; 4],
+}
+
+impl Default for PdfOptions {
+    fn default() -> Self {
+        Self {
+            settings: Settings::default(),
+            version: (1, 7),
+            binary_marker: [0x80; 4],
+        }
+    }
+}
+
+impl<W: Write> Pdf<W> {
+    /// Create a PDF writing to the supplied destination.
+    ///
+    /// The destination must be empty and positioned at its beginning. Pass a
+    /// [`std::io::BufWriter`] for efficient file output. I/O errors, including
+    /// errors writing the header, are reported by [`finish`](Self::finish).
+    pub fn new(writer: W) -> Self {
+        Self::with_options(writer, PdfOptions::default())
     }
 
-    /// Create a new PDF with the given settings and the default buffer capacity
-    /// (currently 8 KB).
-    pub fn with_settings(settings: Settings) -> Self {
-        Self::with_settings_and_capacity(settings, 8 * 1024)
+    /// Create a PDF with the given formatting settings.
+    pub fn with_settings(writer: W, settings: Settings) -> Self {
+        Self::with_options(writer, PdfOptions { settings, ..PdfOptions::default() })
     }
 
-    /// Create a new PDF with the default settings and the specified initial
-    /// buffer capacity.
-    pub fn with_capacity(capacity: usize) -> Self {
-        Self::with_settings_and_capacity(Settings::default(), capacity)
-    }
-
-    /// Create a new PDF with the given settings and the specified initial
-    /// buffer capacity.
-    pub fn with_settings_and_capacity(settings: Settings, capacity: usize) -> Self {
-        let mut chunk = Chunk::with_settings_and_capacity(settings, capacity);
-        chunk.buf.extend(b"%PDF-1.7\n%\x80\x80\x80\x80\n\n");
+    /// Create a PDF with the given header and formatting options.
+    ///
+    /// Panics if either version component exceeds 9.
+    pub fn with_options(writer: W, options: PdfOptions) -> Self {
+        let (major, minor) = options.version;
+        assert!(major < 10 && minor < 10, "PDF version components must be single digits");
+        let mut chunk = Chunk::with_settings(writer, options.settings);
+        let output = chunk.output.as_output();
+        output.extend(b"%PDF-");
+        output.extend(&[b'0' + major, b'.', b'0' + minor]);
+        output.extend(b"\n%");
+        output.extend(&options.binary_marker);
+        output.extend(b"\n\n");
         Self { chunk, trailer_data: TrailerData::default() }
-    }
-
-    /// Set the binary marker in the header of the PDF.
-    ///
-    /// This can be useful if you want to ensure that your PDF consists of only
-    /// ASCII characters, as this is not the case by default.
-    ///
-    /// _Default value_: \x80\x80\x80\x80
-    pub fn set_binary_marker(&mut self, marker: &[u8; 4]) {
-        self.chunk.buf.inner[10..14].copy_from_slice(marker);
-    }
-
-    /// Set the PDF version.
-    ///
-    /// The version is not semantically important to the crate, but must be
-    /// present in the output document.
-    ///
-    /// _Default value_: 1.7.
-    pub fn set_version(&mut self, major: u8, minor: u8) {
-        if major < 10 {
-            self.chunk.buf.inner[5] = b'0' + major;
-        }
-        if minor < 10 {
-            self.chunk.buf.inner[7] = b'0' + minor;
-        }
     }
 
     /// Set the file identifier for the document.
@@ -306,30 +313,39 @@ impl Pdf {
         self.indirect(id).start()
     }
 
-    /// Write the cross-reference table and file trailer and return the
-    /// underlying buffer.
+    /// Write the cross-reference table and trailer, flush, and return the destination.
+    ///
+    /// Returns the first I/O error encountered during serialization or flushing.
     ///
     /// Panics if any indirect reference id was used twice.
-    pub fn finish(self) -> Vec<u8> {
-        let Chunk { mut buf, offsets, settings } = self.chunk;
+    pub fn finish(self) -> io::Result<W> {
+        let Chunk { output: mut sink, offsets, settings } = self.chunk;
+        if sink.failed() {
+            return sink.finish();
+        }
+        let output = sink.as_output();
         let trailer_data = self.trailer_data;
-        let xref_offset = buf.len();
+        let xref_offset = output.len();
 
-        let mut writer = PlainXRefWriter::new(&mut buf);
+        let mut writer = PlainXRefWriter::new(output);
         let xref_len = write_offsets(offsets, &mut writer);
 
         // Write the trailer dictionary.
-        buf.extend(b"trailer\n");
-        let mut trailer = Obj::direct(&mut buf, 0, settings, false).dict();
+        output.extend(b"trailer\n");
+        let mut trailer = Obj::direct(output, 0, settings, false).dict();
         trailer_data.write_into_dict(&mut trailer, xref_len);
         trailer.finish();
 
-        finish_trailer(buf, xref_offset, b"\n")
+        finish_trailer(output, xref_offset, b"\n");
+        sink.finish()
     }
 
-    /// Write the cross-reference stream and file trailer and return the
-    /// underlying buffer. This method is functionally the same as
-    /// [`Pdf::finish`], the difference being that the cross-reference
+    /// Write the cross-reference stream and trailer, flush, and return the destination.
+    ///
+    /// Returns the first I/O error encountered during serialization or flushing.
+    ///
+    /// This method is functionally the same as [`Pdf::finish`], except that
+    /// the cross-reference
     /// information is written as a cross-reference stream instead of a
     /// cross-reference table. Cross-reference streams usually allow for
     /// smaller file sizes since they can also be compressed (see
@@ -344,12 +360,13 @@ impl Pdf {
     /// the whole document.
     ///
     /// Panics if any indirect reference id was used twice.
-    pub fn finish_with_xref_stream(self, xref_id: Ref) -> Vec<u8> {
+    pub fn finish_with_xref_stream(self, xref_id: Ref) -> io::Result<W> {
         self.finish_with_xref_stream_inner(xref_id, |buf| (buf, None))
     }
 
-    /// Write the cross-reference stream and file trailer and return the
-    /// underlying buffer.
+    /// Write the cross-reference stream and trailer, flush, and return the destination.
+    ///
+    /// Returns the first I/O error encountered during serialization or flushing.
     ///
     /// This method is equivalent to [`Pdf::finish_with_xref_stream`], except
     /// that it allows you to apply one or multiple filters to the xref stream
@@ -361,7 +378,7 @@ impl Pdf {
         self,
         xref_id: Ref,
         filter: impl FnOnce(&[u8]) -> (Vec<u8>, XRefFilter),
-    ) -> Vec<u8> {
+    ) -> io::Result<W> {
         self.finish_with_xref_stream_inner(xref_id, |buf| {
             let (xref_data, filter) = filter(&buf);
             (xref_data, Some(filter))
@@ -372,12 +389,16 @@ impl Pdf {
         self,
         xref_id: Ref,
         filter: impl FnOnce(Vec<u8>) -> (Vec<u8>, Option<XRefFilter>),
-    ) -> Vec<u8> {
-        let Chunk { mut buf, mut offsets, settings } = self.chunk;
+    ) -> io::Result<W> {
+        let Chunk { output: mut sink, mut offsets, settings } = self.chunk;
+        if sink.failed() {
+            return sink.finish();
+        }
+        let output = sink.as_output();
         let trailer_data = self.trailer_data;
 
         // Include the reference of the xref stream in the offsets as well!
-        let xref_offset = buf.len();
+        let xref_offset = output.len();
         offsets.push((xref_id, xref_offset));
         let field_width = determine_field_width(xref_offset);
 
@@ -387,7 +408,7 @@ impl Pdf {
         let (xref_data, filter) = filter(writer.buf);
 
         let mut stream =
-            Stream::start(Obj::indirect(&mut buf, xref_id, settings), &xref_data);
+            Stream::start(Obj::indirect(output, xref_id, settings), &xref_data);
 
         stream.pair(Name(b"Type"), Name(b"XRef"));
 
@@ -417,7 +438,8 @@ impl Pdf {
 
         stream.finish();
 
-        finish_trailer(buf, xref_offset, &[])
+        finish_trailer(output, xref_offset, &[]);
+        sink.finish()
     }
 }
 
@@ -429,18 +451,17 @@ pub enum XRefFilter {
     Multiple(Vec<Filter>),
 }
 
-fn finish_trailer(mut buf: Buf, xref_offset: usize, pad: &[u8]) -> Vec<u8> {
-    buf.extend(pad);
+fn finish_trailer(output: &mut Output<'_>, xref_offset: u64, pad: &[u8]) {
+    output.extend(pad);
     // Write startxref pointing to the xref stream
-    buf.extend(b"startxref\n");
-    write!(buf.inner, "{}", xref_offset).unwrap();
+    output.extend(b"startxref\n");
+    write!(output, "{}", xref_offset).unwrap();
 
     // Write EOF marker
-    buf.extend(b"\n%%EOF");
-    buf.into_vec()
+    output.extend(b"\n%%EOF");
 }
 
-fn write_offsets(mut offsets: Vec<(Ref, usize)>, writer: &mut impl XRefWriter) -> i32 {
+fn write_offsets(mut offsets: Vec<(Ref, u64)>, writer: &mut impl XRefWriter) -> i32 {
     offsets.sort();
 
     let xref_len = 1 + offsets.last().map_or(0, |p| p.0.get());
@@ -472,7 +493,7 @@ fn write_offsets(mut offsets: Vec<(Ref, usize)>, writer: &mut impl XRefWriter) -
             }
 
             let gen = if free_id == 0 { 65535 } else { 0 };
-            writer.write_free_entry((next % xref_len) as usize, gen);
+            writer.write_free_entry((next % xref_len) as u64, gen);
             written += 1;
         }
 
@@ -483,21 +504,21 @@ fn write_offsets(mut offsets: Vec<(Ref, usize)>, writer: &mut impl XRefWriter) -
     xref_len
 }
 
-impl Debug for Pdf {
+impl<W: Write> Debug for Pdf<W> {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         f.pad("Pdf(..)")
     }
 }
 
-impl Deref for Pdf {
-    type Target = Chunk;
+impl<W: Write> Deref for Pdf<W> {
+    type Target = Chunk<W>;
 
     fn deref(&self) -> &Self::Target {
         &self.chunk
     }
 }
 
-impl DerefMut for Pdf {
+impl<W: Write> DerefMut for Pdf<W> {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.chunk
     }
@@ -532,8 +553,8 @@ impl TrailerData {
 
 trait XRefWriter {
     fn prologue(&mut self, xref_len: i32);
-    fn write_free_entry(&mut self, offset: usize, gen_number: u16);
-    fn write_occupied_entry(&mut self, offset: usize, gen_number: u16);
+    fn write_free_entry(&mut self, offset: u64, gen_number: u16);
+    fn write_occupied_entry(&mut self, offset: u64, gen_number: u16);
 }
 
 struct XRefStreamWriter {
@@ -548,8 +569,8 @@ impl XRefStreamWriter {
 }
 
 impl XRefStreamWriter {
-    fn write(&mut self, entry_type: u8, offset: usize, gen_number: u16) {
-        let offset_bytes = (offset as u64).to_be_bytes();
+    fn write(&mut self, entry_type: u8, offset: u64, gen_number: u16) {
+        let offset_bytes = offset.to_be_bytes();
 
         self.buf.push(entry_type);
         self.buf.extend(
@@ -564,72 +585,60 @@ impl XRefStreamWriter {
 impl XRefWriter for XRefStreamWriter {
     fn prologue(&mut self, _: i32) {}
 
-    fn write_free_entry(&mut self, offset: usize, gen_number: u16) {
+    fn write_free_entry(&mut self, offset: u64, gen_number: u16) {
         self.write(0, offset, gen_number);
     }
 
-    fn write_occupied_entry(&mut self, offset: usize, gen_number: u16) {
+    fn write_occupied_entry(&mut self, offset: u64, gen_number: u16) {
         self.write(1, offset, gen_number);
     }
 }
 
 struct PlainXRefWriter<'a> {
-    buf: &'a mut Buf,
+    output: &'a mut Output<'a>,
 }
 
 impl<'a> PlainXRefWriter<'a> {
-    fn new(buf: &'a mut Buf) -> Self {
-        Self { buf }
+    fn new(output: &'a mut Output<'a>) -> Self {
+        Self { output }
     }
 }
 
 impl<'a> XRefWriter for PlainXRefWriter<'a> {
     fn prologue(&mut self, xref_len: i32) {
-        self.buf.extend(b"xref\n0 ");
-        self.buf.push_int(xref_len);
-        self.buf.push(b'\n');
+        self.output.extend(b"xref\n0 ");
+        self.output.push_int(xref_len);
+        self.output.push(b'\n');
     }
 
-    fn write_free_entry(&mut self, offset: usize, gen_number: u16) {
-        write!(self.buf.inner, "{offset:010} {gen_number:05} f\r\n").unwrap();
+    fn write_free_entry(&mut self, offset: u64, gen_number: u16) {
+        write!(self.output, "{offset:010} {gen_number:05} f\r\n").unwrap();
     }
 
-    fn write_occupied_entry(&mut self, offset: usize, gen_number: u16) {
-        write!(self.buf.inner, "{offset:010} {gen_number:05} n\r\n").unwrap();
+    fn write_occupied_entry(&mut self, offset: u64, gen_number: u16) {
+        write!(self.output, "{offset:010} {gen_number:05} n\r\n").unwrap();
     }
 }
 
-fn determine_field_width(offset: usize) -> u32 {
-    (usize::BITS - offset.leading_zeros()).div_ceil(8)
+fn determine_field_width(offset: u64) -> u32 {
+    (u64::BITS - offset.leading_zeros()).div_ceil(8)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    /// Print a chunk.
-    #[allow(unused)]
-    pub fn print_chunk(chunk: &Chunk) {
-        println!("========== Chunk ==========");
-        for &(id, offset) in &chunk.offsets {
-            println!("[{}]: {}", id.get(), offset);
-        }
-        println!("---------------------------");
-        print!("{}", String::from_utf8_lossy(&chunk.buf));
-        println!("===========================");
-    }
-
     /// Return the slice of bytes written during the execution of `f`.
     pub fn slice<F>(f: F, settings: Settings) -> Vec<u8>
     where
-        F: FnOnce(&mut Pdf),
+        F: FnOnce(&mut Pdf<Vec<u8>>),
     {
-        let mut w = Pdf::with_settings(settings);
+        let mut w = Pdf::with_settings(Vec::new(), settings);
         let start = w.len();
         f(&mut w);
         let end = w.len();
-        let buf = w.finish();
-        buf[start..end].to_vec()
+        let buf = w.finish().unwrap();
+        buf[start as usize..end as usize].to_vec()
     }
 
     /// Return the slice of bytes written for an object.
@@ -647,9 +656,9 @@ mod tests {
 
     #[test]
     fn test_minimal() {
-        let w = Pdf::new();
+        let w = Pdf::new(Vec::new());
         test!(
-            w.finish(),
+            w.finish().unwrap(),
             b"%PDF-1.7\n%\x80\x80\x80\x80\n",
             b"xref\n0 1\n0000000000 65535 f\r",
             b"trailer\n<<\n  /Size 1\n>>",
@@ -659,11 +668,11 @@ mod tests {
 
     #[test]
     fn test_xref_free_list_short() {
-        let mut w = Pdf::new();
+        let mut w = Pdf::new(Vec::new());
         w.indirect(Ref::new(1)).primitive(1);
         w.indirect(Ref::new(2)).primitive(2);
         test!(
-            w.finish(),
+            w.finish().unwrap(),
             b"%PDF-1.7\n%\x80\x80\x80\x80\n",
             b"1 0 obj\n1\nendobj\n",
             b"2 0 obj\n2\nendobj\n",
@@ -680,13 +689,15 @@ mod tests {
 
     #[test]
     fn test_xref_free_list_long() {
-        let mut w = Pdf::new();
-        w.set_version(1, 4);
+        let mut w = Pdf::with_options(
+            Vec::new(),
+            PdfOptions { version: (1, 4), ..PdfOptions::default() },
+        );
         w.indirect(Ref::new(1)).primitive(1);
         w.indirect(Ref::new(2)).primitive(2);
         w.indirect(Ref::new(5)).primitive(5);
         test!(
-            w.finish(),
+            w.finish().unwrap(),
             b"%PDF-1.4\n%\x80\x80\x80\x80\n",
             b"1 0 obj\n1\nendobj\n",
             b"2 0 obj\n2\nendobj\n",
@@ -708,21 +719,23 @@ mod tests {
     #[test]
     #[should_panic(expected = "duplicate indirect reference id: 3")]
     fn test_xref_free_list_duplicate() {
-        let mut w = Pdf::new();
+        let mut w = Pdf::new(Vec::new());
         w.indirect(Ref::new(3)).primitive(1);
         w.indirect(Ref::new(5)).primitive(2);
         w.indirect(Ref::new(13)).primitive(1);
         w.indirect(Ref::new(3)).primitive(1);
         w.indirect(Ref::new(6)).primitive(2);
-        w.finish();
+        w.finish().unwrap();
     }
 
     #[test]
     fn test_binary_marker() {
-        let mut w = Pdf::new();
-        w.set_binary_marker(b"ABCD");
+        let w = Pdf::with_options(
+            Vec::new(),
+            PdfOptions { binary_marker: *b"ABCD", ..PdfOptions::default() },
+        );
         test!(
-            w.finish(),
+            w.finish().unwrap(),
             b"%PDF-1.7\n%ABCD\n",
             b"xref\n0 1\n0000000000 65535 f\r",
             b"trailer\n<<\n  /Size 1\n>>",
@@ -735,19 +748,21 @@ mod tests {
         assert_eq!(determine_field_width(128), 1);
         assert_eq!(determine_field_width(255), 1);
         assert_eq!(determine_field_width(256), 2);
-        assert_eq!(determine_field_width(u16::MAX as usize), 2);
-        assert_eq!(determine_field_width(u16::MAX as usize + 1), 3);
-        assert_eq!(determine_field_width(u32::MAX as usize), 4);
+        assert_eq!(determine_field_width(u16::MAX as u64), 2);
+        assert_eq!(determine_field_width(u16::MAX as u64 + 1), 3);
+        assert_eq!(determine_field_width(u32::MAX as u64), 4);
+        assert_eq!(determine_field_width(u32::MAX as u64 + 1), 5);
+        assert_eq!(determine_field_width(u64::MAX), 8);
     }
 
     #[test]
     fn test_xref_stream() {
-        let mut w = Pdf::new();
+        let mut w = Pdf::new(Vec::new());
         w.indirect(Ref::new(1)).primitive(1);
         w.indirect(Ref::new(2)).primitive(2);
         w.indirect(Ref::new(5)).primitive(5);
         test!(
-            w.finish_with_xref_stream(Ref::new(6)),
+            w.finish_with_xref_stream(Ref::new(6)).unwrap(),
             b"%PDF-1.7\n%\x80\x80\x80\x80\n",
             b"1 0 obj\n1\nendobj\n",
             b"2 0 obj\n2\nendobj\n",
@@ -762,10 +777,10 @@ mod tests {
 
     #[test]
     fn test_xref_stream_single_filter() {
-        let mut w = Pdf::new();
+        let mut w = Pdf::new(Vec::new());
         w.indirect(Ref::new(1)).primitive(1);
         test!(
-            w.finish_with_xref_stream_and_filter(Ref::new(2), |_| (b"ABCDEFGH".to_vec(), XRefFilter::Single(Filter::FlateDecode))),
+            w.finish_with_xref_stream_and_filter(Ref::new(2), |_| (b"ABCDEFGH".to_vec(), XRefFilter::Single(Filter::FlateDecode))).unwrap(),
             b"%PDF-1.7\n%\x80\x80\x80\x80\n",
             b"1 0 obj\n1\nendobj\n",
             b"2 0 obj\n<<\n  /Length 8\n  /Type /XRef\n  /Filter /FlateDecode\n  /Size 3\n  /W [1 1 2]\n>>\nstream",
@@ -777,10 +792,10 @@ mod tests {
 
     #[test]
     fn test_xref_stream_multiple_filters() {
-        let mut w = Pdf::new();
+        let mut w = Pdf::new(Vec::new());
         w.indirect(Ref::new(1)).primitive(1);
         test!(
-            w.finish_with_xref_stream_and_filter(Ref::new(2), |_| (b"ABCDEFGH".to_vec(), XRefFilter::Multiple(vec![Filter::AsciiHexDecode, Filter::FlateDecode]))),
+            w.finish_with_xref_stream_and_filter(Ref::new(2), |_| (b"ABCDEFGH".to_vec(), XRefFilter::Multiple(vec![Filter::AsciiHexDecode, Filter::FlateDecode]))).unwrap(),
             b"%PDF-1.7\n%\x80\x80\x80\x80\n",
             b"1 0 obj\n1\nendobj\n",
             b"2 0 obj\n<<\n  /Length 8\n  /Type /XRef\n  /Filter [/ASCIIHexDecode /FlateDecode]\n  /Size 3\n  /W [1 1 2]\n>>\nstream",
@@ -792,11 +807,11 @@ mod tests {
 
     #[test]
     fn test_xref_width2() {
-        let mut w = Pdf::new();
+        let mut w = Pdf::new(Vec::new());
         w.stream(Ref::new(1), &[b'0'; 256]);
         w.indirect(Ref::new(2)).primitive(1);
         test!(
-            w.finish_with_xref_stream(Ref::new(3)),
+            w.finish_with_xref_stream(Ref::new(3)).unwrap(),
             b"%PDF-1.7\n%\x80\x80\x80\x80\n",
             b"1 0 obj\n<<\n  /Length 256\n>>\nstream",
             b"0000000000000000000000000000000000000000000000000000000000000000000000000000000000000\

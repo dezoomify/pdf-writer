@@ -43,23 +43,23 @@ fn bench_std_format() -> Vec<u8> {
 }
 
 fn bench_content() -> Vec<u8> {
-    let mut c = Content::with_capacity(16);
+    let mut c = Content::new(Vec::with_capacity(16));
     c.save_state();
     c.set_flatness(10);
     c.restore_state();
-    c.finish().into_vec()
+    c.finish().unwrap()
 }
 
-fn bench_new() -> Pdf {
-    Pdf::new()
+fn bench_new() -> Pdf<Vec<u8>> {
+    Pdf::new(Vec::new())
 }
 
 fn bench_full() -> Vec<u8> {
-    let mut w = Pdf::new();
+    let mut w = Pdf::new(Vec::new());
     w.catalog(Ref::new(1));
     w.page(Ref::new(2)).media_box(Rect::new(0.0, 0.0, 595.0, 842.0));
     w.stream(Ref::new(3), &b"ABCDEFG"[..]);
-    w.finish()
+    w.finish().unwrap()
 }
 
 #[rustfmt::skip]

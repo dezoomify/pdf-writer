@@ -4,16 +4,19 @@
 
 A step-by-step PDF writer.
 
-The entry point into the API is the main `Pdf`, which constructs the document
-into one big internal buffer. The top-level writer has many methods to create
-specialized writers for specific PDF objects. These all follow the same general
-pattern: They borrow the main buffer mutably, expose a builder pattern for
-writing individual fields in a strongly typed fashion and finish up the object
+The entry point is `Pdf<W>`, which writes to any destination implementing
+`std::io::Write`: a `Vec<u8>`, a file, or a caller-defined writer. Use
+`std::io::BufWriter` for efficient file output. Specialized object writers borrow
+the destination, expose strongly typed builder methods, and close their objects
 when dropped.
 
-There are a few more top-level structs with internal buffers, like the builder
-for `Content` streams, but wherever possible buffers are borrowed from parent
-writers to minimize allocations.
+Always call `Pdf::finish()` to write the cross-reference information and trailer,
+flush the destination, and check for I/O errors. Errors from object builders,
+including their destructors, are retained until this call. `finish()` returns the
+destination on success. Passing `&mut destination` keeps ownership with the caller.
+
+`Content`, `Chunk`, and `UnicodeCmap` also take caller-supplied destinations.
+Serialization limits are available separately through their `limits()` methods.
 
 ## Minimal example
 The following example creates a PDF with a single, empty A4 page.
@@ -27,7 +30,8 @@ let page_tree_id = Ref::new(2);
 let page_id = Ref::new(3);
 
 // Write a document catalog and a page tree with one A4 page that uses no resources.
-let mut pdf = Pdf::new();
+let file = std::fs::File::create("target/empty.pdf")?;
+let mut pdf = Pdf::new(std::io::BufWriter::new(file));
 pdf.catalog(catalog_id).pages(page_tree_id);
 pdf.pages(page_tree_id).kids([page_id]).count(1);
 pdf.page(page_id)
@@ -35,9 +39,21 @@ pdf.page(page_id)
     .media_box(Rect::new(0.0, 0.0, 595.0, 842.0))
     .resources();
 
-// Finish with cross-reference table and trailer and write to file.
-std::fs::write("target/empty.pdf", pdf.finish())?;
+// Write the cross-reference table and trailer, then flush the destination.
+pdf.finish()?;
 ```
+
+For in-memory output, construct `Pdf::new(Vec::new())` and retrieve the bytes with
+`let bytes = pdf.finish()?`. Buffer capacity belongs to the caller:
+`Pdf::new(Vec::with_capacity(8192))`.
+
+Reusable chunks use caller-supplied byte storage: `Chunk::new(Vec::new())`.
+Append with `pdf.extend(&chunk)?`, or renumber with
+`chunk.renumber(Vec::new(), mapping)?`. Both report errors immediately.
+PDF and content destinations only require `Write`. Reusable chunks need a byte
+view through `AsRef<[u8]>`; file readback is outside the chunk API.
+
+Header options are set at construction using `Pdf::with_options` and `PdfOptions`.
 
 For more examples, check out the [examples folder] in the repository.
 

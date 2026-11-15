@@ -1,10 +1,14 @@
 //! This example shows how to apply soft masks in arbitrary content streams.
 
+use std::fs::File;
+use std::io::BufWriter;
+
 use pdf_writer::{types::MaskType, Content, Finish, Name, Pdf, Rect, Ref};
 
 fn main() -> std::io::Result<()> {
     // Start writing.
-    let mut pdf = Pdf::new();
+    let file = File::create("target/soft_masks.pdf")?;
+    let mut pdf = Pdf::new(BufWriter::new(file));
 
     // Define some indirect reference ids we'll use.
     let catalog_id = Ref::new(1);
@@ -21,7 +25,7 @@ fn main() -> std::io::Result<()> {
     let page_rect = Rect::new(0.0, 0.0, 595.0, 842.0);
 
     // Draw a star in a content stream and use it as a mask later.
-    let mut star_content = Content::new();
+    let mut star_content = Content::new(Vec::new());
 
     let offset = 150.0;
 
@@ -42,7 +46,7 @@ fn main() -> std::io::Result<()> {
     star_content.line_to(41.2, 38.0);
     star_content.close_path();
     star_content.fill_even_odd();
-    let star_content = star_content.finish();
+    let star_content = star_content.finish()?;
 
     let ext_g_state_name = Name(b"GS1");
     let mut star_group = pdf.form_xobject(star_group_id, &star_content);
@@ -80,7 +84,7 @@ fn main() -> std::io::Result<()> {
     page.finish();
 
     // Write a few rectangles to the content stream.
-    let mut content = Content::new();
+    let mut content = Content::new(Vec::new());
     content.set_parameters(ext_g_state_name);
     content.set_fill_rgb(1.0, 0.0, 0.0);
     content.rect(10.0, 10.0, 200.0, 200.0);
@@ -94,12 +98,10 @@ fn main() -> std::io::Result<()> {
     content.rect(10.0, 200.0, 200.0, 290.0);
     content.fill_nonzero();
 
-    pdf.stream(content_id, &content.finish());
+    pdf.stream(content_id, &content.finish()?);
 
     // Finish writing (this automatically creates the cross-reference table and
-    // file trailer) and retrieve the resulting byte buffer.
-    let buf: Vec<u8> = pdf.finish();
-
-    // Write the thing to a file.
-    std::fs::write("target/soft_masks.pdf", buf)
+    // file trailer) and flush the destination.
+    pdf.finish()?;
+    Ok(())
 }

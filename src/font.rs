@@ -849,29 +849,36 @@ impl WMode {
 }
 
 /// A builder for a `/ToUnicode` character map stream.
-pub struct UnicodeCmap<G = u16> {
-    buf: Buf,
-    mappings: Buf,
+#[must_use = "call finish to complete the character map and check for I/O errors"]
+pub struct UnicodeCmap<W: Write, G = u16> {
+    output: Sink<W>,
+    mappings: Vec<u8>,
     count: i32,
     glyph_id: PhantomData<G>,
 }
 
-impl<G> UnicodeCmap<G>
+impl<W: Write, G> UnicodeCmap<W, G>
 where
     G: GlyphId,
 {
     /// Create a new, empty unicode character map for a horizontal writing mode
     /// font.
-    pub fn new(name: Name, info: SystemInfo) -> Self {
-        Self::with_writing_mode(name, info, WMode::Horizontal)
+    pub fn new(writer: W, name: Name, info: SystemInfo) -> Self {
+        Self::with_writing_mode(writer, name, info, WMode::Horizontal)
     }
 
     /// Create a new, empty unicode character map while specifying the writing
     /// mode.
-    pub fn with_writing_mode(name: Name, info: SystemInfo, mode: WMode) -> Self {
+    pub fn with_writing_mode(
+        writer: W,
+        name: Name,
+        info: SystemInfo,
+        mode: WMode,
+    ) -> Self {
         // https://www.adobe.com/content/dam/acom/en/devnet/font/pdfs/5014.CIDFont_Spec.pdf
 
-        let mut buf = Buf::new();
+        let mut output = Sink::new(writer);
+        let buf = output.as_output();
 
         // Static header.
         buf.extend(b"%!PS-Adobe-3.0 Resource-CMap\n");
@@ -921,15 +928,15 @@ where
         // We just cover the whole unicode codespace.
         buf.extend(b"1 begincodespacerange\n");
         buf.push(b'<');
-        G::MIN.push(&mut buf);
+        G::MIN.push(buf);
         buf.extend(b"> <");
-        G::MAX.push(&mut buf);
+        G::MAX.push(buf);
         buf.extend(b">\n");
         buf.extend(b"endcodespacerange\n");
 
         Self {
-            buf,
-            mappings: Buf::new(),
+            output,
+            mappings: Vec::new(),
             count: 0,
             glyph_id: PhantomData,
         }
@@ -946,18 +953,21 @@ where
         glyph: G,
         codepoints: impl IntoIterator<Item = char>,
     ) {
-        self.mappings.push(b'<');
-        glyph.push(&mut self.mappings);
-        self.mappings.extend(b"> <");
+        let mut mappings = Sink::new(&mut self.mappings);
+        let buf = mappings.as_output();
+        buf.push(b'<');
+        glyph.push(buf);
+        buf.extend(b"> <");
 
         for c in codepoints {
             for &mut part in c.encode_utf16(&mut [0; 2]) {
-                self.mappings.push_hex_u16(part);
+                buf.push_hex_u16(part);
             }
         }
 
-        self.mappings.extend(b">\n");
+        buf.extend(b">\n");
         self.count += 1;
+        self.output.limits_mut().register_int(self.count);
 
         // At most 100 lines per range.
         if self.count >= 100 {
@@ -965,32 +975,44 @@ where
         }
     }
 
+    /// Get the limits of the character map, including the pending mapping range.
+    pub fn limits(&self) -> &Limits {
+        self.output.limits()
+    }
+
+    /// Get a shared reference to the destination.
+    pub fn get_ref(&self) -> &W {
+        &self.output.writer
+    }
+
     /// Finish building the character map.
-    pub fn finish(mut self) -> Buf {
+    pub fn finish(mut self) -> io::Result<W> {
         // Flush the in-progress range.
         self.flush_range();
 
         // End of body.
-        self.buf.extend(b"endcmap\n");
-        self.buf.extend(b"CMapName currentdict /CMap defineresource pop\n");
-        self.buf.extend(b"end\n");
-        self.buf.extend(b"end\n");
-        self.buf.extend(b"%%EndResource\n");
-        self.buf.extend(b"%%EOF");
+        let buf = self.output.as_output();
+        buf.extend(b"endcmap\n");
+        buf.extend(b"CMapName currentdict /CMap defineresource pop\n");
+        buf.extend(b"end\n");
+        buf.extend(b"end\n");
+        buf.extend(b"%%EndResource\n");
+        buf.extend(b"%%EOF");
 
-        self.buf
+        self.output.finish()
     }
 
     fn flush_range(&mut self) {
+        let buf = self.output.as_output();
         if self.count > 0 {
-            self.buf.push_int(self.count);
-            self.buf.extend(b" beginbfchar\n");
-            self.buf.extend(self.mappings.as_slice());
-            self.buf.extend(b"endbfchar\n");
+            buf.push_int(self.count);
+            buf.extend(b" beginbfchar\n");
+            buf.extend(self.mappings.as_slice());
+            buf.extend(b"endbfchar\n");
         }
 
         self.count = 0;
-        self.mappings.inner.clear();
+        self.mappings.clear();
     }
 }
 
@@ -1006,19 +1028,19 @@ impl GlyphId for u16 {}
 
 /// Module to seal the `GlyphId` trait.
 mod private {
-    use crate::buf::Buf;
+    use crate::output::Output;
 
     pub trait Sealed {
         const MIN: Self;
         const MAX: Self;
-        fn push(self, buf: &mut Buf);
+        fn push(self, buf: &mut Output<'_>);
     }
 
     impl Sealed for u8 {
         const MIN: Self = u8::MIN;
         const MAX: Self = u8::MAX;
 
-        fn push(self, buf: &mut Buf) {
+        fn push(self, buf: &mut Output<'_>) {
             buf.push_hex(self);
         }
     }
@@ -1027,7 +1049,7 @@ mod private {
         const MIN: Self = u16::MIN;
         const MAX: Self = u16::MAX;
 
-        fn push(self, buf: &mut Buf) {
+        fn push(self, buf: &mut Output<'_>) {
             buf.push_hex_u16(self);
         }
     }

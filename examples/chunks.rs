@@ -4,6 +4,9 @@
 //! It demonstrates how to allocate IDs on the fly using [`Ref::bump`] and
 //! shows how to write multiple things at once using [`Chunk`]s.
 
+use std::fs::File;
+use std::io::BufWriter;
+
 use pdf_writer::{Chunk, Content, Name, Pdf, Rect, Ref};
 
 fn main() -> std::io::Result<()> {
@@ -13,12 +16,13 @@ fn main() -> std::io::Result<()> {
     let mut alloc = Ref::new(1);
 
     // Start writing.
-    let mut pdf = Pdf::new();
+    let file = File::create("target/chunks.pdf")?;
+    let mut pdf = Pdf::new(BufWriter::new(file));
 
     // Create a secondary chunk for parallel writing. This will allows us to
     // write stuff while we're also holding a mutable reference to the main
     // writer.
-    let mut secondary = Chunk::new();
+    let mut secondary = Chunk::new(Vec::new());
 
     // We'll collect the page IDs here.
     let page_tree_id = alloc.bump();
@@ -38,7 +42,7 @@ fn main() -> std::io::Result<()> {
         page.parent(page_tree_id);
 
         // Create the page's content.
-        let mut content = Content::new();
+        let mut content = Content::new(Vec::new());
         let mut extg_states = vec![];
         for i in 1..=count {
             // Define a unique name for the ExtG state.
@@ -66,7 +70,7 @@ fn main() -> std::io::Result<()> {
         // Write the content, add it to the secondary chunk (the main chunk is
         // still borrowed) and register it with the page.
         let content_id = alloc.bump();
-        secondary.stream(content_id, &content.finish());
+        secondary.stream(content_id, &content.finish()?);
         page.contents(content_id);
 
         // Reference the ExtG states that we wrote in the page's resources
@@ -77,7 +81,7 @@ fn main() -> std::io::Result<()> {
     }
 
     // Add the ExtG states to the PDF.
-    pdf.extend(&secondary);
+    pdf.extend(&secondary)?;
 
     // Write the root of the page tree.
     pdf.pages(page_tree_id)
@@ -87,6 +91,7 @@ fn main() -> std::io::Result<()> {
     // Write the document catalog.
     pdf.catalog(alloc.bump()).pages(page_tree_id);
 
-    // Finish and write the thing to a file.
-    std::fs::write("target/chunks.pdf", pdf.finish())
+    // Finish the PDF and flush the destination.
+    pdf.finish()?;
+    Ok(())
 }
