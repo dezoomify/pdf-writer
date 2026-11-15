@@ -46,7 +46,7 @@ fn main() -> std::io::Result<()> {
     page.resources()
         .color_spaces()
         .insert(color_space_name)
-        .start::<ColorSpace>()
+        .start::<ColorSpace<_>>()
         .icc_based(icc_id);
     page.finish();
 

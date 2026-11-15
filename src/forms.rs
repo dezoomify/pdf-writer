@@ -5,13 +5,13 @@ use crate::types::AnnotationType;
 /// Writer for an _interactive forms dictionary_. PDF 1.2+.
 ///
 /// This struct is created by [`Catalog::form`].
-pub struct Form<'a> {
-    dict: Dict<'a>,
+pub struct Form<'a, W: Write + ?Sized> {
+    dict: Dict<'a, W>,
 }
 
 writer!(Form: |obj| Self { dict: obj.dict() });
 
-impl Form<'_> {
+impl<W: Write + ?Sized> Form<'_, W> {
     /// Write the `/Fields` attribute to reference the root [form fields](Field)
     /// (those who have no immediate parent) of this document.
     pub fn fields(&mut self, fields: impl IntoIterator<Item = Ref>) -> &mut Self {
@@ -41,7 +41,7 @@ impl Form<'_> {
     /// that shall be used by form field appearance streams. At a minimum, this
     /// dictionary shall contain a font entry specifying the resource name and
     /// font dictionary of the default font for displaying text.
-    pub fn default_resources(&mut self) -> Resources<'_> {
+    pub fn default_resources(&mut self) -> Resources<'_, W> {
         self.insert(Name(b"DR")).start()
     }
 
@@ -61,7 +61,7 @@ impl Form<'_> {
     }
 }
 
-deref!('a, Form<'a> => Dict<'a>, dict);
+deref!('a, W,Form<'a, W> => Dict<'a, W>, dict);
 
 bitflags::bitflags! {
     /// Bitflags describing various document-level characteristics related to
@@ -83,14 +83,14 @@ bitflags::bitflags! {
 /// Writer for an _form field dictionary_.
 ///
 /// This struct is created by [`Chunk::form_field`].
-pub struct Field<'a> {
-    dict: Dict<'a>,
+pub struct Field<'a, W: Write + ?Sized> {
+    dict: Dict<'a, W>,
 }
 
 writer!(Field: |obj| Self { dict: obj.dict() });
 
 /// Permissible on all fields.
-impl<'a> Field<'a> {
+impl<'a, W: Write + ?Sized> Field<'a, W> {
     /// Write the `/FT` attribute to set the type of this field.
     pub fn field_type(&mut self, typ: FieldType) -> &mut Self {
         self.pair(Name(b"FT"), typ.to_name());
@@ -157,7 +157,7 @@ impl<'a> Field<'a> {
     /// various trigger events.
     ///
     /// Note that this attribute is forbidden in PDF/A.
-    pub fn additional_actions(&mut self) -> AdditionalActions<'_> {
+    pub fn additional_actions(&mut self) -> AdditionalActions<'_, W> {
         self.insert(Name(b"AA")).start()
     }
 
@@ -168,7 +168,7 @@ impl<'a> Field<'a> {
     /// While the widget annotation could be a single child to a
     /// terminal field, most readers will not correctly read the form
     /// field, if it's not merged with its annotation.
-    pub fn into_annotation(mut self) -> Annotation<'a> {
+    pub fn into_annotation(mut self) -> Annotation<'a, W> {
         self.dict.pair(Name(b"Type"), Name(b"Annot"));
         let mut annot = Annotation { dict: self.dict };
         annot.subtype(AnnotationType::Widget);
@@ -176,7 +176,7 @@ impl<'a> Field<'a> {
     }
 }
 
-deref!('a, Field<'a> => Dict<'a>, dict);
+deref!('a, W,Field<'a, W> => Dict<'a, W>, dict);
 
 /// The type of a [`Field`].
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]
@@ -205,7 +205,7 @@ impl FieldType {
 }
 
 /// Only permissible on button fields.
-impl Field<'_> {
+impl<W: Write + ?Sized> Field<'_, W> {
     /// Write the `/Opt` array to set the export values of children of this
     /// field. Only permissible on checkbox fields, or radio button fields.
     /// PDF 1.4+.
@@ -219,7 +219,7 @@ impl Field<'_> {
 }
 
 /// Only permissible on check box fields.
-impl Field<'_> {
+impl<W: Write + ?Sized> Field<'_, W> {
     /// Write the `/V` attribute to set the state of this check box field. The
     /// state corresponds to an appearance stream in the [appearance
     /// dictionary](AppearanceCharacteristics) of this field's widget
@@ -257,7 +257,7 @@ impl CheckBoxState {
 }
 
 /// Only permissible on radio button fields.
-impl Field<'_> {
+impl<W: Write + ?Sized> Field<'_, W> {
     /// Write the `/V` attribute to set the state of this radio button field.
     /// The state corresponds to an appearance stream in the
     /// [appearance subdictionary](Appearance) of this field's widget
@@ -280,7 +280,7 @@ impl Field<'_> {
 }
 
 /// Only permissible on text fields.
-impl Field<'_> {
+impl<W: Write + ?Sized> Field<'_, W> {
     /// Write the `/MaxLen` attribute to set the maximum length of the fields
     /// text in characters. Only permissible on text fields.
     ///
@@ -307,7 +307,7 @@ impl Field<'_> {
 }
 
 /// Only permissible on fields containing variable text.
-impl Field<'_> {
+impl<W: Write + ?Sized> Field<'_, W> {
     /// Write the `/DA` attribute containing a sequence of valid page-content
     /// graphics or text state operators that define such properties as the
     /// field's text size and colour. Only permissible on fields containing
@@ -357,10 +357,10 @@ pub enum Quadding {
 }
 
 /// Only permissible on choice fields.
-impl Field<'_> {
+impl<W: Write + ?Sized> Field<'_, W> {
     /// Start writing the `/Opt` array to set the options that shall be
     /// presented to the user.
-    pub fn choice_options(&mut self) -> ChoiceOptions<'_> {
+    pub fn choice_options(&mut self) -> ChoiceOptions<'_, W> {
         self.insert(Name(b"Opt")).start()
     }
 
@@ -438,13 +438,13 @@ impl Field<'_> {
 /// Writer for a _choice options array_.
 ///
 /// This struct is created by [`Field::choice_options`].
-pub struct ChoiceOptions<'a> {
-    array: Array<'a>,
+pub struct ChoiceOptions<'a, W: Write + ?Sized> {
+    array: Array<'a, W>,
 }
 
 writer!(ChoiceOptions: |obj| Self { array: obj.array() });
 
-impl ChoiceOptions<'_> {
+impl<W: Write + ?Sized> ChoiceOptions<'_, W> {
     /// Add an option with the given value.
     pub fn option(&mut self, value: impl TextStrLike) -> &mut Self {
         self.array.item(value);
@@ -486,10 +486,10 @@ impl ChoiceOptions<'_> {
     }
 }
 
-deref!('a, ChoiceOptions<'a> => Array<'a>, array);
+deref!('a, W,ChoiceOptions<'a, W> => Array<'a, W>, array);
 
 /// Only permissible on signature fields.
-impl Field<'_> {
+impl<W: Write + ?Sized> Field<'_, W> {
     /// Write the `/Lock` attribute which points to a [signature field lock
     /// dictionary](SignatureFieldLock), containing a set of form fields that shall
     /// be locked when this signature field is signed. PDF 1.5+.
@@ -510,8 +510,8 @@ impl Field<'_> {
 /// Writer for a _signature field lock dictionary_.
 ///
 /// This struct is created by [`Chunk::signature_field_lock`].
-pub struct SignatureFieldLock<'a> {
-    dict: Dict<'a>,
+pub struct SignatureFieldLock<'a, W: Write + ?Sized> {
+    dict: Dict<'a, W>,
 }
 
 writer!(SignatureFieldLock: |obj| {
@@ -520,7 +520,7 @@ writer!(SignatureFieldLock: |obj| {
     Self { dict }
 });
 
-impl SignatureFieldLock<'_> {
+impl<W: Write + ?Sized> SignatureFieldLock<'_, W> {
     /// Write the `/Action` attribute which, in conjunction with
     /// the [`/Fields`](SignatureFieldLock::fields) array, indicates the
     /// set of fields that should be locked when the signature field is signed.
@@ -552,7 +552,7 @@ impl SignatureFieldLock<'_> {
     }
 }
 
-deref!('a, SignatureFieldLock<'a> => Dict<'a>, dict);
+deref!('a, W,SignatureFieldLock<'a, W> => Dict<'a, W>, dict);
 
 /// In conjunction with the [`/Fields`](SignatureFieldLock::fields) array,
 /// indicates the set of fields that should be locked when the signature
@@ -581,8 +581,8 @@ impl SignatureLockAction {
 /// Writer for a _seed value dictionary_.
 ///
 /// This struct is created by [`Chunk::signature_seed_value`].
-pub struct SignatureSeedValue<'a> {
-    dict: Dict<'a>,
+pub struct SignatureSeedValue<'a, W: Write + ?Sized> {
+    dict: Dict<'a, W>,
 }
 
 writer!(SignatureSeedValue: |obj| {
@@ -591,7 +591,7 @@ writer!(SignatureSeedValue: |obj| {
     Self { dict }
 });
 
-impl SignatureSeedValue<'_> {
+impl<W: Write + ?Sized> SignatureSeedValue<'_, W> {
     /// Write the `/Ff` attribute to set which entries of this signature
     /// seed value dictionary are mandatory constraints.
     pub fn constraint_flags(&mut self, flags: SignatureSeedValueFlags) -> &mut Self {
@@ -648,7 +648,7 @@ impl SignatureSeedValue<'_> {
 
     /// Start writing the `/Cert` dictionary to set various characteristics
     /// of the certificate that shall be used when signing.
-    pub fn certificate(&mut self) -> CertificateSeedValue<'_> {
+    pub fn certificate(&mut self) -> CertificateSeedValue<'_, W> {
         self.insert(Name(b"Cert")).start()
     }
 
@@ -669,14 +669,14 @@ impl SignatureSeedValue<'_> {
     /// to the document will invalidate the signature. PDF 1.6+.
     pub fn modification_detection_prevention(
         &mut self,
-    ) -> SignatureModificationDetectionPrevention<'_> {
+    ) -> SignatureModificationDetectionPrevention<'_, W> {
         self.insert(Name(b"MDP")).start()
     }
 
     /// Start writing the `/TimeStamp` dictionary to set a
     /// timestamping server and whether a timestamp is required
     /// while signing. PDF 1.6+.
-    pub fn timestamp(&mut self) -> SignatureTimeStamp<'_> {
+    pub fn timestamp(&mut self) -> SignatureTimeStamp<'_, W> {
         self.insert(Name(b"TimeStamp")).start()
     }
 
@@ -729,7 +729,7 @@ impl SignatureSeedValue<'_> {
     }
 }
 
-deref!('a, SignatureSeedValue<'a> => Dict<'a>, dict);
+deref!('a, W,SignatureSeedValue<'a, W> => Dict<'a, W>, dict);
 
 bitflags::bitflags! {
     /// Bitflags describing the whether a specific entry in a
@@ -814,13 +814,13 @@ impl SeedValueParserVersion {
 /// [_signature seed value dictionary_](SignatureSeedValue).
 ///
 /// This struct is created by [`SignatureSeedValue::modification_detection_prevention`].
-pub struct SignatureModificationDetectionPrevention<'a> {
-    dict: Dict<'a>,
+pub struct SignatureModificationDetectionPrevention<'a, W: Write + ?Sized> {
+    dict: Dict<'a, W>,
 }
 
 writer!(SignatureModificationDetectionPrevention: |obj| Self { dict: obj.dict() });
 
-impl SignatureModificationDetectionPrevention<'_> {
+impl<W: Write + ?Sized> SignatureModificationDetectionPrevention<'_, W> {
     /// Write the `/P` attribute to set the type of signature of
     /// this field and the changes allowed without invalidating the signature.
     pub fn signature_type(&mut self, p: MdpSignatureType) -> &mut Self {
@@ -829,7 +829,7 @@ impl SignatureModificationDetectionPrevention<'_> {
     }
 }
 
-deref!('a, SignatureModificationDetectionPrevention<'a> => Dict<'a>, dict);
+deref!('a, W,SignatureModificationDetectionPrevention<'a, W> => Dict<'a, W>, dict);
 
 /// The access permissions granted for the document
 /// without invalidating the signature.
@@ -878,13 +878,13 @@ impl MdpSignatureType {
 /// [_signature seed value dictionary_](SignatureSeedValue).
 ///
 /// This struct is created by [`SignatureSeedValue::timestamp`].
-pub struct SignatureTimeStamp<'a> {
-    dict: Dict<'a>,
+pub struct SignatureTimeStamp<'a, W: Write + ?Sized> {
+    dict: Dict<'a, W>,
 }
 
 writer!(SignatureTimeStamp: |obj| Self { dict: obj.dict() });
 
-impl SignatureTimeStamp<'_> {
+impl<W: Write + ?Sized> SignatureTimeStamp<'_, W> {
     /// Write the `/URL` attribute to set the URL of the timestamping
     /// server to use when signing.
     pub fn url(&mut self, url: Str<'_>) -> &mut Self {
@@ -899,7 +899,7 @@ impl SignatureTimeStamp<'_> {
     }
 }
 
-deref!('a, SignatureTimeStamp<'a> => Dict<'a>, dict);
+deref!('a, W,SignatureTimeStamp<'a, W> => Dict<'a, W>, dict);
 
 /// The author's intent for whether the signing dialog
 /// should allow the user to lock the document at the time
@@ -927,8 +927,8 @@ impl LockingIntent {
 /// Writer for a _certificate seed value dictionary_.
 ///
 /// This struct is created by [`SignatureSeedValue::certificate`].
-pub struct CertificateSeedValue<'a> {
-    dict: Dict<'a>,
+pub struct CertificateSeedValue<'a, W: Write + ?Sized> {
+    dict: Dict<'a, W>,
 }
 
 writer!(CertificateSeedValue: |obj| {
@@ -937,7 +937,7 @@ writer!(CertificateSeedValue: |obj| {
     Self { dict }
 });
 
-impl CertificateSeedValue<'_> {
+impl<W: Write + ?Sized> CertificateSeedValue<'_, W> {
     /// Write the `/Ff` attribute to set which entries of this certificate
     /// seed value dictionary are mandatory constraints.
     pub fn constraint_flags(&mut self, flags: CertificateSeedValueFlags) -> &mut Self {
@@ -1013,7 +1013,7 @@ impl CertificateSeedValue<'_> {
     /// [constraint flags](CertificateSeedValue::constraint_flags),
     /// this is a required constraint.
     /// PDF 1.7+.
-    pub fn subject_dn(&mut self) -> TypedArray<'_, Dict<'_>> {
+    pub fn subject_dn(&mut self) -> TypedArray<'_, Dict<'_, W>, W> {
         self.insert(Name(b"SubjectDN")).array().typed()
     }
 
@@ -1074,7 +1074,7 @@ impl CertificateSeedValue<'_> {
     }
 }
 
-deref!('a, CertificateSeedValue<'a> => Dict<'a>, dict);
+deref!('a, W,CertificateSeedValue<'a, W> => Dict<'a, W>, dict);
 
 bitflags::bitflags! {
     /// Bitflags describing the whether a specific entry in a

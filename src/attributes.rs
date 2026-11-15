@@ -7,13 +7,13 @@ use crate::types::{ArtifactSubtype, ArtifactType};
 /// This struct must set the `/O` attribute by calling any of the methods. This
 /// struct is created by [`ClassMap::single`]. An array of this struct is
 /// created by [`StructElement::attributes`] and [`ClassMap::multiple`].
-pub struct Attributes<'a> {
-    dict: Dict<'a>,
+pub struct Attributes<'a, W: Write + ?Sized> {
+    dict: Dict<'a, W>,
 }
 
 writer!(Attributes: |obj| Self { dict: obj.dict() });
 
-impl<'a> Attributes<'a> {
+impl<'a, W: Write + ?Sized> Attributes<'a, W> {
     /// Write the `/O` attribute to set the owner.
     ///
     /// Should not be called when using any of the other methods.
@@ -22,73 +22,73 @@ impl<'a> Attributes<'a> {
     /// CSS 1 and CSS 2 variants. Set it to `true` when writing a PDF 2.0 file
     /// conforming to the 2020 edition of the standard or later.
     pub fn owner(&mut self, owner: AttributeOwner, iso32000_2_2020: bool) -> &mut Self {
-        self.pair(Name(b"O"), owner.to_name(iso32000_2_2020));
+        self.pair(Name(b"W"), owner.to_name(iso32000_2_2020));
         self
     }
 
     /// Set the `/O` attribute to user-defined and start writing the `/P` array
     /// with user properties. PDF 1.6+
-    pub fn user(&mut self) -> TypedArray<'_, UserProperty<'_>> {
-        self.pair(Name(b"O"), AttributeOwner::User.to_name(false));
+    pub fn user(&mut self) -> TypedArray<'_, UserProperty<'_, W>, W> {
+        self.pair(Name(b"W"), AttributeOwner::User.to_name(false));
         self.insert(Name(b"P")).array().typed()
     }
 
     /// Set the `/O` attribute to `Layout` to start writing layout parameters.
-    pub fn layout(self) -> LayoutAttributes<'a> {
+    pub fn layout(self) -> LayoutAttributes<'a, W> {
         LayoutAttributes::start_with_dict(self.dict)
     }
 
     /// Set the `/O` attribute to `List` to start writing list attributes.
-    pub fn list(self) -> ListAttributes<'a> {
+    pub fn list(self) -> ListAttributes<'a, W> {
         ListAttributes::start_with_dict(self.dict)
     }
 
     /// Set the `/O` attribute to `PrintField` to start writing attributes for
     /// the appearance of form fields. PDF 1.6+
-    pub fn field(self) -> FieldAttributes<'a> {
+    pub fn field(self) -> FieldAttributes<'a, W> {
         FieldAttributes::start_with_dict(self.dict)
     }
 
     /// Set the `/O` attribute to `Table` to start writing table attributes.
-    pub fn table(self) -> TableAttributes<'a> {
+    pub fn table(self) -> TableAttributes<'a, W> {
         TableAttributes::start_with_dict(self.dict)
     }
 
     /// Set the `/O` attribute to `Artifact` to start writing attributes for
     /// artifacts. PDF 2.0+
-    pub fn artifact(self) -> ArtifactAttributes<'a> {
+    pub fn artifact(self) -> ArtifactAttributes<'a, W> {
         ArtifactAttributes::start_with_dict(self.dict)
     }
 
     /// Set the `/O` attribute to `FENote` to start writing attributes for
     /// footnote elements. PDF/UA-2
-    pub fn note(self) -> FENoteAttributes<'a> {
+    pub fn note(self) -> FENoteAttributes<'a, W> {
         FENoteAttributes::start_with_dict(self.dict)
     }
 
     /// Set the `/O` attribute to `NSO` and set the `/NS` attribute to an
     /// indirect reference to a [`Namespace`] dictionary to start writing
     /// attributes for a namespace. PDF 2.0+
-    pub fn namespace(self, ns: Ref) -> Dict<'a> {
+    pub fn namespace(self, ns: Ref) -> Dict<'a, W> {
         let mut dict = self.dict;
-        dict.pair(Name(b"O"), AttributeOwner::NSO.to_name(true));
+        dict.pair(Name(b"W"), AttributeOwner::NSO.to_name(true));
         dict.pair(Name(b"NS"), ns);
         dict
     }
 }
 
-deref!('a, Attributes<'a> => Dict<'a>, dict);
+deref!('a, W,Attributes<'a, W> => Dict<'a, W>, dict);
 
 /// Writer for an _user property dictionary_. PDF 1.6+
 ///
 /// An array of this struct is created by [`Attributes::user`].
-pub struct UserProperty<'a> {
-    dict: Dict<'a>,
+pub struct UserProperty<'a, W: Write + ?Sized> {
+    dict: Dict<'a, W>,
 }
 
 writer!(UserProperty: |obj| Self { dict: obj.dict() });
 
-impl UserProperty<'_> {
+impl<W: Write + ?Sized> UserProperty<'_, W> {
     /// Write the `/N` attribute to set the name of the property.
     pub fn name(&mut self, name: impl TextStrLike) -> &mut Self {
         self.dict.pair(Name(b"N"), name);
@@ -96,7 +96,7 @@ impl UserProperty<'_> {
     }
 
     /// Start writing the `/V` attribute to set the value of the property.
-    pub fn value(&mut self) -> Obj<'_> {
+    pub fn value(&mut self) -> Obj<'_, W> {
         self.dict.insert(Name(b"V"))
     }
 
@@ -114,21 +114,21 @@ impl UserProperty<'_> {
     }
 }
 
-deref!('a, UserProperty<'a> => Dict<'a>, dict);
+deref!('a, W,UserProperty<'a, W> => Dict<'a, W>, dict);
 
 /// Writer for an _layout attributes dictionary_. PDF 1.4+
 ///
 /// This struct is created by [`Attributes::layout`].
-pub struct LayoutAttributes<'a> {
-    dict: Dict<'a>,
+pub struct LayoutAttributes<'a, W: Write + ?Sized> {
+    dict: Dict<'a, W>,
 }
 
 writer!(LayoutAttributes: |obj| Self::start_with_dict(obj.dict()));
 
 /// General layout attributes.
-impl<'a> LayoutAttributes<'a> {
-    pub(crate) fn start_with_dict(mut dict: Dict<'a>) -> Self {
-        dict.pair(Name(b"O"), AttributeOwner::Layout.to_name(false));
+impl<'a, W: Write + ?Sized> LayoutAttributes<'a, W> {
+    pub(crate) fn start_with_dict(mut dict: Dict<'a, W>) -> Self {
+        dict.pair(Name(b"W"), AttributeOwner::Layout.to_name(false));
         Self { dict }
     }
 
@@ -247,7 +247,7 @@ impl<T> Sides<T> {
     }
 
     /// Write the sides of a primitive type.
-    fn write_primitive(self, obj: Obj<'_>)
+    fn write_primitive<W: Write + ?Sized>(self, obj: Obj<'_, W>)
     where
         T: Primitive + PartialEq,
     {
@@ -256,8 +256,11 @@ impl<T> Sides<T> {
 
     /// Write the sides of a value that can be mapped to a primitive type with a
     /// closure.
-    fn write_map_primitive<P>(self, obj: Obj<'_>, mut to_primitive: impl FnMut(T) -> P)
-    where
+    fn write_map_primitive<P, W: Write + ?Sized>(
+        self,
+        obj: Obj<'_, W>,
+        mut to_primitive: impl FnMut(T) -> P,
+    ) where
         T: PartialEq,
         P: Primitive,
     {
@@ -272,7 +275,7 @@ impl<T> Sides<T> {
     }
 
     /// Write the sides of an iterable type containing primitive values.
-    fn write_iter<P>(self, obj: Obj<'_>)
+    fn write_iter<P, W: Write + ?Sized>(self, obj: Obj<'_, W>)
     where
         T: IntoIterator<Item = P> + PartialEq,
         P: Primitive,
@@ -384,7 +387,7 @@ impl LayoutBorderStyle {
 }
 
 /// Block level elements.
-impl LayoutAttributes<'_> {
+impl<W: Write + ?Sized> LayoutAttributes<'_, W> {
     /// Write the `/SpaceBefore` attribute.
     pub fn space_before(&mut self, space: f32) -> &mut Self {
         self.dict.pair(Name(b"SpaceBefore"), space);
@@ -462,7 +465,7 @@ impl TextAlign {
 }
 
 /// Illustration elements.
-impl LayoutAttributes<'_> {
+impl<W: Write + ?Sized> LayoutAttributes<'_, W> {
     /// Write the `/BBox` attribute.
     pub fn bbox(&mut self, bbox: Rect) -> &mut Self {
         self.dict.pair(Name(b"BBox"), bbox);
@@ -471,7 +474,7 @@ impl LayoutAttributes<'_> {
 }
 
 /// Table header and data.
-impl LayoutAttributes<'_> {
+impl<W: Write + ?Sized> LayoutAttributes<'_, W> {
     /// Write the `/BlockAlign` attribute.
     pub fn block_align(&mut self, align: BlockAlign) -> &mut Self {
         self.dict.pair(Name(b"BlockAlign"), align.to_name());
@@ -525,7 +528,7 @@ impl BlockAlign {
 }
 
 /// Grouping elements.
-impl LayoutAttributes<'_> {
+impl<W: Write + ?Sized> LayoutAttributes<'_, W> {
     /// Write the `/ColumnCount` attribute. PDF 1.6+.
     pub fn column_count(&mut self, count: i32) -> &mut Self {
         self.dict.pair(Name(b"ColumnCount"), count);
@@ -533,12 +536,12 @@ impl LayoutAttributes<'_> {
     }
 
     /// Start writing the `/ColumnWidths` array. PDF 1.6+.
-    pub fn column_widths(&mut self) -> TrackSizes<'_> {
+    pub fn column_widths(&mut self) -> TrackSizes<'_, W> {
         TrackSizes::start(self.dict.insert(Name(b"ColumnWidths")))
     }
 
     /// Start writing the `/ColumnGap` array. PDF 1.6+.
-    pub fn column_gap(&mut self) -> TrackSizes<'_> {
+    pub fn column_gap(&mut self) -> TrackSizes<'_, W> {
         TrackSizes::start(self.dict.insert(Name(b"ColumnGap")))
     }
 }
@@ -547,13 +550,13 @@ impl LayoutAttributes<'_> {
 ///
 /// This writer is created by [`LayoutAttributes::column_widths`] and
 /// [`LayoutAttributes::column_gap`].
-pub struct TrackSizes<'a> {
-    obj: Obj<'a>,
+pub struct TrackSizes<'a, W: Write + ?Sized> {
+    obj: Obj<'a, W>,
 }
 
 writer!(TrackSizes: |obj| Self { obj });
 
-impl<'a> TrackSizes<'a> {
+impl<'a, W: Write + ?Sized> TrackSizes<'a, W> {
     /// Write the same value for all column or gap tracks.
     pub fn uniform(self, value: f32) {
         self.obj.primitive(value);
@@ -562,12 +565,12 @@ impl<'a> TrackSizes<'a> {
     /// Start writing an array of values for individual tracks. If there are
     /// more tracks than values, the last value is used for all remaining
     /// tracks.
-    pub fn individual(self) -> TypedArray<'a, f32> {
+    pub fn individual(self) -> TypedArray<'a, f32, W> {
         self.obj.array().typed()
     }
 }
 
-deref!('a, TrackSizes<'a> => Obj<'a>, obj);
+deref!('a, W,TrackSizes<'a, W> => Obj<'a, W>, obj);
 
 /// The inline alignment.
 #[derive(Debug, Copy, Clone, Default, Eq, PartialEq, Hash)]
@@ -592,7 +595,7 @@ impl InlineAlign {
 }
 
 /// Inline elements.
-impl LayoutAttributes<'_> {
+impl<W: Write + ?Sized> LayoutAttributes<'_, W> {
     /// Write the `/LineHeight` attribute.
     pub fn line_height(&mut self, height: LineHeight) -> &mut Self {
         height.write(self.dict.insert(Name(b"LineHeight")));
@@ -648,7 +651,7 @@ pub enum LineHeight {
 }
 
 impl LineHeight {
-    pub(crate) fn write(self, obj: Obj) {
+    pub(crate) fn write<W: Write + ?Sized>(self, obj: Obj<W>) {
         match self {
             Self::Normal => obj.primitive(Name(b"Normal")),
             Self::Auto => obj.primitive(Name(b"Auto")),
@@ -716,7 +719,7 @@ pub enum GlyphOrientationVertical {
 }
 
 impl GlyphOrientationVertical {
-    pub(crate) fn write(self, obj: Obj) {
+    pub(crate) fn write<W: Write + ?Sized>(self, obj: Obj<W>) {
         match self {
             Self::Auto => obj.primitive(Name(b"Auto")),
             Self::Angle(angle) => obj.primitive(angle),
@@ -725,7 +728,7 @@ impl GlyphOrientationVertical {
 }
 
 /// Vertical Text.
-impl LayoutAttributes<'_> {
+impl<W: Write + ?Sized> LayoutAttributes<'_, W> {
     /// Write the `/GlyphOrientationVertical` attribute. PDF 1.5+.
     pub fn glyph_orientation_vertical(
         &mut self,
@@ -737,7 +740,7 @@ impl LayoutAttributes<'_> {
 }
 
 /// Ruby annotations.
-impl LayoutAttributes<'_> {
+impl<W: Write + ?Sized> LayoutAttributes<'_, W> {
     /// Write the `/RubyAlign` attribute. PDF 1.5+.
     pub fn ruby_align(&mut self, align: RubyAlign) -> &mut Self {
         self.dict.pair(Name(b"RubyAlign"), align.to_name());
@@ -804,20 +807,20 @@ impl RubyPosition {
     }
 }
 
-deref!('a, LayoutAttributes<'a> => Dict<'a>, dict);
+deref!('a, W,LayoutAttributes<'a, W> => Dict<'a, W>, dict);
 
 /// Writer for an _list attributes dictionary_. PDF 1.4+
 ///
 /// This struct is created by [`Attributes::list`].
-pub struct ListAttributes<'a> {
-    dict: Dict<'a>,
+pub struct ListAttributes<'a, W: Write + ?Sized> {
+    dict: Dict<'a, W>,
 }
 
 writer!(ListAttributes: |obj| Self::start_with_dict(obj.dict()));
 
-impl<'a> ListAttributes<'a> {
-    pub(crate) fn start_with_dict(mut dict: Dict<'a>) -> Self {
-        dict.pair(Name(b"O"), AttributeOwner::List.to_name(false));
+impl<'a, W: Write + ?Sized> ListAttributes<'a, W> {
+    pub(crate) fn start_with_dict(mut dict: Dict<'a, W>) -> Self {
+        dict.pair(Name(b"W"), AttributeOwner::List.to_name(false));
         Self { dict }
     }
 
@@ -846,7 +849,7 @@ impl<'a> ListAttributes<'a> {
     }
 }
 
-deref!('a, ListAttributes<'a> => Dict<'a>, dict);
+deref!('a, W,ListAttributes<'a, W> => Dict<'a, W>, dict);
 
 /// The list numbering type.
 #[derive(Debug, Copy, Clone, Default, Eq, PartialEq, Hash)]
@@ -900,15 +903,15 @@ impl ListNumbering {
 /// Writer for an _PrintField attributes dictionary_. PDF 1.6+
 ///
 /// This struct is created by [`Attributes::field`].
-pub struct FieldAttributes<'a> {
-    dict: Dict<'a>,
+pub struct FieldAttributes<'a, W: Write + ?Sized> {
+    dict: Dict<'a, W>,
 }
 
 writer!(FieldAttributes: |obj| Self::start_with_dict(obj.dict()));
 
-impl<'a> FieldAttributes<'a> {
-    pub(crate) fn start_with_dict(mut dict: Dict<'a>) -> Self {
-        dict.pair(Name(b"O"), AttributeOwner::PrintField.to_name(false));
+impl<'a, W: Write + ?Sized> FieldAttributes<'a, W> {
+    pub(crate) fn start_with_dict(mut dict: Dict<'a, W>) -> Self {
+        dict.pair(Name(b"W"), AttributeOwner::PrintField.to_name(false));
         Self { dict }
     }
 
@@ -937,7 +940,7 @@ impl<'a> FieldAttributes<'a> {
     }
 }
 
-deref!('a, FieldAttributes<'a> => Dict<'a>, dict);
+deref!('a, W,FieldAttributes<'a, W> => Dict<'a, W>, dict);
 
 /// The kind of form control.
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]
@@ -991,15 +994,15 @@ impl FieldState {
 /// Writer for a _table attributes dictionary_. PDF 1.4+
 ///
 /// This struct is created by [`Attributes::table`].
-pub struct TableAttributes<'a> {
-    dict: Dict<'a>,
+pub struct TableAttributes<'a, W: Write + ?Sized> {
+    dict: Dict<'a, W>,
 }
 
 writer!(TableAttributes: |obj| Self::start_with_dict(obj.dict()));
 
-impl<'a> TableAttributes<'a> {
-    pub(crate) fn start_with_dict(mut dict: Dict<'a>) -> Self {
-        dict.pair(Name(b"O"), AttributeOwner::Table.to_name(false));
+impl<'a, W: Write + ?Sized> TableAttributes<'a, W> {
+    pub(crate) fn start_with_dict(mut dict: Dict<'a, W>) -> Self {
+        dict.pair(Name(b"W"), AttributeOwner::Table.to_name(false));
         Self { dict }
     }
 
@@ -1019,7 +1022,7 @@ impl<'a> TableAttributes<'a> {
 
     /// Write the `/Headers` attribute to refer to the header cells of the
     /// table. PDF 1.6+.
-    pub fn headers(&mut self) -> TypedArray<'_, Str<'_>> {
+    pub fn headers(&mut self) -> TypedArray<'_, Str<'_>, W> {
         self.dict.insert(Name(b"Headers")).array().typed()
     }
 
@@ -1045,7 +1048,7 @@ impl<'a> TableAttributes<'a> {
     }
 }
 
-deref!('a, TableAttributes<'a> => Dict<'a>, dict);
+deref!('a, W,TableAttributes<'a, W> => Dict<'a, W>, dict);
 
 /// The scope of a table header cell.
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]
@@ -1071,15 +1074,15 @@ impl TableHeaderScope {
 /// Writer for a _artifact attributes dictionary_. PDF 2.0+
 ///
 /// This struct is created by [`Attributes::artifact`].
-pub struct ArtifactAttributes<'a> {
-    dict: Dict<'a>,
+pub struct ArtifactAttributes<'a, W: Write + ?Sized> {
+    dict: Dict<'a, W>,
 }
 
 writer!(ArtifactAttributes: |obj| Self::start_with_dict(obj.dict()));
 
-impl<'a> ArtifactAttributes<'a> {
-    pub(crate) fn start_with_dict(mut dict: Dict<'a>) -> Self {
-        dict.pair(Name(b"O"), AttributeOwner::Artifact.to_name(true));
+impl<'a, W: Write + ?Sized> ArtifactAttributes<'a, W> {
+    pub(crate) fn start_with_dict(mut dict: Dict<'a, W>) -> Self {
+        dict.pair(Name(b"W"), AttributeOwner::Artifact.to_name(true));
         Self { dict }
     }
 
@@ -1103,20 +1106,20 @@ impl<'a> ArtifactAttributes<'a> {
     }
 }
 
-deref!('a, ArtifactAttributes<'a> => Dict<'a>, dict);
+deref!('a, W,ArtifactAttributes<'a, W> => Dict<'a, W>, dict);
 
 /// Writer for a _foot- and endnote attributes dictionary_. PDF/UA-2
 ///
 /// This struct is created by [`Attributes::note`].
-pub struct FENoteAttributes<'a> {
-    dict: Dict<'a>,
+pub struct FENoteAttributes<'a, W: Write + ?Sized> {
+    dict: Dict<'a, W>,
 }
 
 writer!(FENoteAttributes: |obj| Self::start_with_dict(obj.dict()));
 
-impl<'a> FENoteAttributes<'a> {
-    pub(crate) fn start_with_dict(mut dict: Dict<'a>) -> Self {
-        dict.pair(Name(b"O"), AttributeOwner::FENote.to_name(true));
+impl<'a, W: Write + ?Sized> FENoteAttributes<'a, W> {
+    pub(crate) fn start_with_dict(mut dict: Dict<'a, W>) -> Self {
+        dict.pair(Name(b"W"), AttributeOwner::FENote.to_name(true));
         Self { dict }
     }
 
@@ -1127,7 +1130,7 @@ impl<'a> FENoteAttributes<'a> {
     }
 }
 
-deref!('a, FENoteAttributes<'a> => Dict<'a>, dict);
+deref!('a, W,FENoteAttributes<'a, W> => Dict<'a, W>, dict);
 
 /// The type of foot- or endnote.
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]

@@ -46,13 +46,13 @@ macro_rules! common_func_methods {
 /// Writer for a _sampled function stream_. PDF 1.2+.
 ///
 /// This struct is created by [`Chunk::sampled_function`].
-pub struct SampledFunction<'a> {
-    stream: Stream<'a>,
+pub struct SampledFunction<'a, W: Write + ?Sized> {
+    stream: Stream<'a, W>,
 }
 
-impl<'a> SampledFunction<'a> {
+impl<'a, W: Write + ?Sized> SampledFunction<'a, W> {
     /// Create a new sampled function writer.
-    pub(crate) fn start(mut stream: Stream<'a>) -> Self {
+    pub(crate) fn start(mut stream: Stream<'a, W>) -> Self {
         stream.pair(Name(b"FunctionType"), FunctionType::Sampled.to_int());
         Self { stream }
     }
@@ -100,7 +100,7 @@ impl<'a> SampledFunction<'a> {
     }
 }
 
-deref!('a, SampledFunction<'a> => Stream<'a>, stream);
+deref!('a, W,SampledFunction<'a, W> => Stream<'a, W>, stream);
 
 /// How to interpolate between the samples in a function of the
 /// sampled type.
@@ -129,8 +129,8 @@ impl InterpolationOrder {
 ///
 /// This struct is created by [`Chunk::exponential_function`] and
 /// [`writers::Separation::tint_exponential`].
-pub struct ExponentialFunction<'a> {
-    dict: Dict<'a>,
+pub struct ExponentialFunction<'a, W: Write + ?Sized> {
+    dict: Dict<'a, W>,
 }
 
 writer!(ExponentialFunction: |obj| {
@@ -139,7 +139,7 @@ writer!(ExponentialFunction: |obj| {
     Self { dict }
 });
 
-impl ExponentialFunction<'_> {
+impl<W: Write + ?Sized> ExponentialFunction<'_, W> {
     common_func_methods!();
 
     /// Write the `/C0` array.
@@ -167,7 +167,7 @@ impl ExponentialFunction<'_> {
     }
 }
 
-deref!('a, ExponentialFunction<'a> => Dict<'a>, dict);
+deref!('a, W,ExponentialFunction<'a, W> => Dict<'a, W>, dict);
 
 /// Writer for a _stitching function dictionary_. PDF 1.3+.
 ///
@@ -176,8 +176,8 @@ deref!('a, ExponentialFunction<'a> => Dict<'a>, dict);
 ///
 /// This struct is created by [`Chunk::stitching_function`] and
 /// [`writers::Separation::tint_stitching`].
-pub struct StitchingFunction<'a> {
-    dict: Dict<'a>,
+pub struct StitchingFunction<'a, W: Write + ?Sized> {
+    dict: Dict<'a, W>,
 }
 
 writer!(StitchingFunction: |obj| {
@@ -186,7 +186,7 @@ writer!(StitchingFunction: |obj| {
     Self { dict }
 });
 
-impl StitchingFunction<'_> {
+impl<W: Write + ?Sized> StitchingFunction<'_, W> {
     common_func_methods!();
 
     /// Write the `/Functions` array.
@@ -216,18 +216,18 @@ impl StitchingFunction<'_> {
     }
 }
 
-deref!('a, StitchingFunction<'a> => Dict<'a>, dict);
+deref!('a, W,StitchingFunction<'a, W> => Dict<'a, W>, dict);
 
 /// Writer for a _PostScript function stream_. PDF 1.3+.
 ///
 /// This struct is created by [`Chunk::post_script_function`].
-pub struct PostScriptFunction<'a> {
-    stream: Stream<'a>,
+pub struct PostScriptFunction<'a, W: Write + ?Sized> {
+    stream: Stream<'a, W>,
 }
 
-impl<'a> PostScriptFunction<'a> {
+impl<'a, W: Write + ?Sized> PostScriptFunction<'a, W> {
     /// Create a new postscript function writer.
-    pub(crate) fn start(mut stream: Stream<'a>) -> Self {
+    pub(crate) fn start(mut stream: Stream<'a, W>) -> Self {
         stream.pair(Name(b"FunctionType"), FunctionType::PostScript.to_int());
         Self { stream }
     }
@@ -235,7 +235,7 @@ impl<'a> PostScriptFunction<'a> {
     common_func_methods!();
 }
 
-deref!('a, PostScriptFunction<'a> => Stream<'a>, stream);
+deref!('a, W,PostScriptFunction<'a, W> => Stream<'a, W>, stream);
 
 /// PostScript operators for use in Type 4 functions.
 #[derive(Debug, Copy, Clone, PartialEq)]
@@ -339,14 +339,14 @@ impl PostScriptOp<'_> {
     ///
     /// The destination is flushed before returning. No byte buffer is allocated.
     pub fn encode<W: Write + ?Sized>(ops: &[Self], writer: &mut W) -> io::Result<Limits> {
-        let mut output = Sink::new(writer);
-        Self::write_slice(ops, output.as_output());
+        let mut output = Output::new(writer);
+        Self::write_slice(ops, &mut output);
         let limits = output.limits().clone();
         output.finish()?;
         Ok(limits)
     }
 
-    fn write_slice(ops: &[Self], output: &mut Output<'_>) {
+    fn write_slice<W: Write + ?Sized>(ops: &[Self], output: &mut Output<W>) {
         output.push(b'{');
         if ops.len() > 1 {
             output.push(b' ');
@@ -363,7 +363,7 @@ impl PostScriptOp<'_> {
         output.push(b'}');
     }
 
-    fn write(&self, output: &mut Output<'_>) {
+    fn write<W: Write + ?Sized>(&self, output: &mut Output<W>) {
         match *self {
             Self::Real(r) => output.push_decimal(r),
             Self::Integer(i) => output.push_val(i),

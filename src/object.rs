@@ -10,13 +10,14 @@ use crate::object::sealed::Sealed;
 
 mod sealed {
     use crate::output::Output;
+    use std::io::Write;
 
     pub trait Sealed {
         /// Whether the primitive object starts with one of the PDF delimiter characters.
         const STARTS_WITH_DELIMITER: bool;
 
         /// Serialize the object to the destination.
-        fn write(self, output: &mut Output<'_>);
+        fn write<W: Write + ?Sized>(self, output: &mut Output<W>);
     }
 }
 
@@ -30,7 +31,7 @@ where
     const STARTS_WITH_DELIMITER: bool = T::STARTS_WITH_DELIMITER;
 
     #[inline]
-    fn write(self, output: &mut Output<'_>) {
+    fn write<W: Write + ?Sized>(self, output: &mut Output<W>) {
         (*self).write(output);
     }
 }
@@ -41,7 +42,7 @@ impl Sealed for bool {
     const STARTS_WITH_DELIMITER: bool = false;
 
     #[inline]
-    fn write(self, output: &mut Output<'_>) {
+    fn write<W: Write + ?Sized>(self, output: &mut Output<W>) {
         if self {
             output.extend(b"true");
         } else {
@@ -56,7 +57,7 @@ impl Sealed for i32 {
     const STARTS_WITH_DELIMITER: bool = false;
 
     #[inline]
-    fn write(self, output: &mut Output<'_>) {
+    fn write<W: Write + ?Sized>(self, output: &mut Output<W>) {
         output.push_int(self);
     }
 }
@@ -67,7 +68,7 @@ impl Sealed for f32 {
     const STARTS_WITH_DELIMITER: bool = false;
 
     #[inline]
-    fn write(self, output: &mut Output<'_>) {
+    fn write<W: Write + ?Sized>(self, output: &mut Output<W>) {
         output.push_float(self);
     }
 }
@@ -99,7 +100,7 @@ impl Str<'_> {
 impl Sealed for Str<'_> {
     const STARTS_WITH_DELIMITER: bool = true;
 
-    fn write(self, output: &mut Output<'_>) {
+    fn write<W: Write + ?Sized>(self, output: &mut Output<W>) {
         output.limits_mut().register_str_len(self.0.len());
 
         // We use:
@@ -165,7 +166,7 @@ pub struct TextStr<'a>(pub &'a str);
 impl Sealed for TextStr<'_> {
     const STARTS_WITH_DELIMITER: bool = true;
 
-    fn write(self, output: &mut Output<'_>) {
+    fn write<W: Write + ?Sized>(self, output: &mut Output<W>) {
         output.limits_mut().register_str_len(self.0.len());
 
         // ASCII and PDFDocEncoding match for 32 up to 126.
@@ -253,7 +254,7 @@ pub struct TextStrWithLang<'a, 'b>(pub &'b [(LanguageIdentifier, &'a str)]);
 impl<'a, 'b> Sealed for TextStrWithLang<'a, 'b> {
     const STARTS_WITH_DELIMITER: bool = true;
 
-    fn write(self, output: &mut Output<'_>) {
+    fn write<W: Write + ?Sized>(self, output: &mut Output<W>) {
         let mut len = 0;
 
         for (lang, text) in self.0 {
@@ -281,17 +282,20 @@ impl<'a, 'b> Sealed for TextStrWithLang<'a, 'b> {
 
 impl Primitive for TextStrWithLang<'_, '_> {}
 
-fn write_utf16be_text_str_header(output: &mut Output<'_>) {
+fn write_utf16be_text_str_header<W: Write + ?Sized>(output: &mut Output<W>) {
     output.push(b'<');
     output.push_hex(254);
     output.push_hex(255);
 }
 
-fn write_utf16be_text_str_footer(output: &mut Output<'_>) {
+fn write_utf16be_text_str_footer<W: Write + ?Sized>(output: &mut Output<W>) {
     output.push(b'>');
 }
 
-fn write_utf16be_lang_code(lang: LanguageIdentifier, output: &mut Output<'_>) {
+fn write_utf16be_lang_code<W: Write + ?Sized>(
+    lang: LanguageIdentifier,
+    output: &mut Output<W>,
+) {
     // The escape character U+001B encloses the language tag. It must not
     // otherwise appear in a text string and the spec offers no opportunity to
     // escape it. In the future, `pdf-writer` may offer a constructor for
@@ -327,7 +331,7 @@ pub struct Name<'a>(pub &'a [u8]);
 impl Sealed for Name<'_> {
     const STARTS_WITH_DELIMITER: bool = true;
 
-    fn write(self, output: &mut Output<'_>) {
+    fn write<W: Write + ?Sized>(self, output: &mut Output<W>) {
         output.limits_mut().register_name_len(self.0.len());
 
         output.push(b'/');
@@ -383,7 +387,7 @@ impl Sealed for Null {
     const STARTS_WITH_DELIMITER: bool = false;
 
     #[inline]
-    fn write(self, output: &mut Output<'_>) {
+    fn write<W: Write + ?Sized>(self, output: &mut Output<W>) {
         output.extend(b"null");
     }
 }
@@ -436,7 +440,7 @@ impl Sealed for Ref {
     const STARTS_WITH_DELIMITER: bool = false;
 
     #[inline]
-    fn write(self, output: &mut Output<'_>) {
+    fn write<W: Write + ?Sized>(self, output: &mut Output<W>) {
         output.push_int(self.0.get());
         output.extend(b" 0 R");
     }
@@ -476,7 +480,7 @@ impl Sealed for Rect {
     const STARTS_WITH_DELIMITER: bool = true;
 
     #[inline]
-    fn write(self, output: &mut Output<'_>) {
+    fn write<W: Write + ?Sized>(self, output: &mut Output<W>) {
         output.push(b'[');
         output.push_val(self.x1);
         output.push(b' ');
@@ -594,7 +598,7 @@ impl Date {
 impl Sealed for Date {
     const STARTS_WITH_DELIMITER: bool = true;
 
-    fn write(self, output: &mut Output<'_>) {
+    fn write<W: Write + ?Sized>(self, output: &mut Output<W>) {
         output.extend(b"(D:");
 
         (|| {
@@ -622,19 +626,19 @@ impl Primitive for Date {}
 
 /// Writer for an arbitrary object.
 #[must_use = "not consuming this leaves the writer in an inconsistent state"]
-pub struct Obj<'a> {
-    output: &'a mut Output<'a>,
+pub struct Obj<'a, W: Write + ?Sized> {
+    output: &'a mut Output<W>,
     indirect: bool,
     indent: u8,
     settings: Settings,
     needs_padding: bool,
 }
 
-impl<'a> Obj<'a> {
+impl<'a, W: Write + ?Sized> Obj<'a, W> {
     /// Start a new direct object.
     #[inline]
     pub(crate) fn direct(
-        output: &'a mut Output<'a>,
+        output: &'a mut Output<W>,
         indent: u8,
         settings: Settings,
         needs_padding: bool,
@@ -651,7 +655,7 @@ impl<'a> Obj<'a> {
     /// Start a new indirect object.
     #[inline]
     pub(crate) fn indirect(
-        output: &'a mut Output<'a>,
+        output: &'a mut Output<W>,
         id: Ref,
         settings: Settings,
     ) -> Self {
@@ -704,13 +708,13 @@ impl<'a> Obj<'a> {
 
     /// Start writing an array.
     #[inline]
-    pub fn array(self) -> Array<'a> {
+    pub fn array(self) -> Array<'a, W> {
         self.start()
     }
 
     /// Start writing a dictionary.
     #[inline]
-    pub fn dict(self) -> Dict<'a> {
+    pub fn dict(self) -> Dict<'a, W> {
         self.start()
     }
 
@@ -726,34 +730,34 @@ impl<'a> Obj<'a> {
     ///     .resources()
     ///     .fonts()
     ///     .insert(Name(b"F1"))
-    ///     .start::<Type1Font>()
+    ///     .start::<Type1Font<_>>()
     ///     .base_font(Name(b"Helvetica"));
     /// ```
     #[inline]
-    pub fn start<W: Writer<'a>>(self) -> W {
-        W::start(self)
+    pub fn start<T: Writer<'a, W>>(self) -> T {
+        T::start(self)
     }
 }
 
 /// A writer for a specific type of PDF object.
-pub trait Writer<'a> {
+pub trait Writer<'a, W: Write + ?Sized> {
     /// Start writing the object.
-    fn start(obj: Obj<'a>) -> Self;
+    fn start(obj: Obj<'a, W>) -> Self;
 }
 
 /// Rewrites a writer's lifetime.
 ///
 /// This is a workaround to ignore the `'b` lifetime in a
-/// `TypedArray<'a, SomeWriter<'b>>` because that lifetime is meaningless. What
+/// `TypedArray<'a, SomeWriter<'b, W>, W>` because that lifetime is meaningless. What
 /// we actually want is each item's `SomeWriter` to borrow from the array itself.
-pub trait Rewrite<'a> {
+pub trait Rewrite<'a, W: Write + ?Sized> {
     /// The writer with the rewritten lifetime.
-    type Output: Writer<'a>;
+    type Output: Writer<'a, W>;
 }
 
 /// Writer for an array.
-pub struct Array<'a> {
-    output: &'a mut Output<'a>,
+pub struct Array<'a, W: Write + ?Sized> {
+    output: &'a mut Output<W>,
     indirect: bool,
     indent: u8,
     settings: Settings,
@@ -771,7 +775,7 @@ writer!(Array: |obj| {
     }
 });
 
-impl<'a> Array<'a> {
+impl<'a, W: Write + ?Sized> Array<'a, W> {
     /// The number of written items.
     #[inline]
     pub fn len(&self) -> i32 {
@@ -786,7 +790,7 @@ impl<'a> Array<'a> {
 
     /// Start writing an arbitrary item.
     #[inline]
-    pub fn push(&mut self) -> Obj<'_> {
+    pub fn push(&mut self) -> Obj<'_, W> {
         let needs_padding = if self.len != 0 {
             if self.settings.pretty {
                 self.output.push(b' ');
@@ -826,12 +830,12 @@ impl<'a> Array<'a> {
 
     /// Convert into a typed version.
     #[inline]
-    pub fn typed<T>(self) -> TypedArray<'a, T> {
+    pub fn typed<T>(self) -> TypedArray<'a, T, W> {
         TypedArray::wrap(self)
     }
 }
 
-impl Drop for Array<'_> {
+impl<W: Write + ?Sized> Drop for Array<'_, W> {
     #[inline]
     fn drop(&mut self) {
         self.output.limits_mut().register_array_len(self.len as usize);
@@ -847,25 +851,25 @@ impl Drop for Array<'_> {
 }
 
 /// Writer for an array of items of a fixed type.
-pub struct TypedArray<'a, T> {
-    array: Array<'a>,
+pub struct TypedArray<'a, T, W: Write + ?Sized> {
+    array: Array<'a, W>,
     phantom: PhantomData<fn() -> T>,
 }
 
-impl<'a, T> Writer<'a> for TypedArray<'a, T> {
-    fn start(obj: Obj<'a>) -> Self {
+impl<'a, T, W: Write + ?Sized> Writer<'a, W> for TypedArray<'a, T, W> {
+    fn start(obj: Obj<'a, W>) -> Self {
         Self { array: obj.array(), phantom: PhantomData }
     }
 }
 
-impl<'a, T> Rewrite<'a> for TypedArray<'_, T> {
-    type Output = TypedArray<'a, T>;
+impl<'a, T, W: Write + ?Sized + 'a> Rewrite<'a, W> for TypedArray<'_, T, W> {
+    type Output = TypedArray<'a, T, W>;
 }
 
-impl<'a, T> TypedArray<'a, T> {
+impl<'a, T, W: Write + ?Sized> TypedArray<'a, T, W> {
     /// Wrap an array to make it type-safe.
     #[inline]
-    pub fn wrap(array: Array<'a>) -> Self {
+    pub fn wrap(array: Array<'a, W>) -> Self {
         Self { array, phantom: PhantomData }
     }
 
@@ -905,17 +909,17 @@ impl<'a, T> TypedArray<'a, T> {
     ///
     /// Returns `T` but with its lifetime rewritten from `'a` to `'b`.
     #[inline]
-    pub fn push<'b>(&'b mut self) -> <T as Rewrite<'b>>::Output
+    pub fn push<'b>(&'b mut self) -> <T as Rewrite<'b, W>>::Output
     where
-        T: Writer<'a> + Rewrite<'b>,
+        T: Writer<'a, W> + Rewrite<'b, W>,
     {
-        <T as Rewrite>::Output::start(self.array.push())
+        <T as Rewrite<W>>::Output::start(self.array.push())
     }
 }
 
 /// Writer for a dictionary.
-pub struct Dict<'a> {
-    output: &'a mut Output<'a>,
+pub struct Dict<'a, W: Write + ?Sized> {
+    output: &'a mut Output<W>,
     indirect: bool,
     indent: u8,
     settings: Settings,
@@ -933,7 +937,7 @@ writer!(Dict: |obj| {
     }
 });
 
-impl<'a> Dict<'a> {
+impl<'a, W: Write + ?Sized> Dict<'a, W> {
     /// The number of written pairs.
     #[inline]
     pub fn len(&self) -> i32 {
@@ -948,7 +952,7 @@ impl<'a> Dict<'a> {
 
     /// Start writing a pair with an arbitrary value.
     #[inline]
-    pub fn insert(&mut self, key: Name) -> Obj<'_> {
+    pub fn insert(&mut self, key: Name) -> Obj<'_, W> {
         self.len += 1;
 
         // Keys always start with a delimiter since they are names, so we never need
@@ -995,12 +999,12 @@ impl<'a> Dict<'a> {
 
     /// Convert into a typed version.
     #[inline]
-    pub fn typed<T>(self) -> TypedDict<'a, T> {
+    pub fn typed<T>(self) -> TypedDict<'a, T, W> {
         TypedDict::wrap(self)
     }
 }
 
-impl Drop for Dict<'_> {
+impl<W: Write + ?Sized> Drop for Dict<'_, W> {
     #[inline]
     fn drop(&mut self) {
         self.output.limits_mut().register_dict_entries(self.len as usize);
@@ -1025,25 +1029,25 @@ impl Drop for Dict<'_> {
 }
 
 /// Writer for a dictionary mapping to a fixed type.
-pub struct TypedDict<'a, T> {
-    dict: Dict<'a>,
+pub struct TypedDict<'a, T, W: Write + ?Sized> {
+    dict: Dict<'a, W>,
     phantom: PhantomData<fn() -> T>,
 }
 
-impl<'a, T> Writer<'a> for TypedDict<'a, T> {
-    fn start(obj: Obj<'a>) -> Self {
+impl<'a, T, W: Write + ?Sized> Writer<'a, W> for TypedDict<'a, T, W> {
+    fn start(obj: Obj<'a, W>) -> Self {
         Self { dict: obj.dict(), phantom: PhantomData }
     }
 }
 
-impl<'a, T> Rewrite<'a> for TypedDict<'_, T> {
-    type Output = TypedDict<'a, T>;
+impl<'a, T, W: Write + ?Sized + 'a> Rewrite<'a, W> for TypedDict<'_, T, W> {
+    type Output = TypedDict<'a, T, W>;
 }
 
-impl<'a, T> TypedDict<'a, T> {
+impl<'a, T, W: Write + ?Sized> TypedDict<'a, T, W> {
     /// Wrap a dictionary to make it type-safe.
     #[inline]
-    pub fn wrap(dict: Dict<'a>) -> Self {
+    pub fn wrap(dict: Dict<'a, W>) -> Self {
         Self { dict, phantom: PhantomData }
     }
 
@@ -1086,26 +1090,26 @@ impl<'a, T> TypedDict<'a, T> {
     ///
     /// Returns `T` but with its lifetime rewritten from `'a` to `'b`.
     #[inline]
-    pub fn insert<'b>(&'b mut self, key: Name) -> <T as Rewrite<'b>>::Output
+    pub fn insert<'b>(&'b mut self, key: Name) -> <T as Rewrite<'b, W>>::Output
     where
-        T: Writer<'a> + Rewrite<'b>,
+        T: Writer<'a, W> + Rewrite<'b, W>,
     {
-        <T as Rewrite>::Output::start(self.dict.insert(key))
+        <T as Rewrite<W>>::Output::start(self.dict.insert(key))
     }
 }
 
 /// Writer for an indirect stream object.
-pub struct Stream<'a> {
-    dict: ManuallyDrop<Dict<'a>>,
+pub struct Stream<'a, W: Write + ?Sized> {
+    dict: ManuallyDrop<Dict<'a, W>>,
     data: &'a [u8],
 }
 
-impl<'a> Stream<'a> {
+impl<'a, W: Write + ?Sized> Stream<'a, W> {
     /// Start writing a stream.
     ///
     /// Panics if the object writer is not indirect or the stream length exceeds
     /// `i32::MAX`.
-    pub(crate) fn start(obj: Obj<'a>, data: &'a [u8]) -> Self {
+    pub(crate) fn start(obj: Obj<'a, W>, data: &'a [u8]) -> Self {
         assert!(obj.indirect);
 
         let mut dict = obj.dict();
@@ -1130,12 +1134,12 @@ impl<'a> Stream<'a> {
     /// This is a dictionary that specifies parameters to be used in decoding
     /// the stream data using the filter specified by the
     /// [`/Filter`](Self::filter) attribute.
-    pub fn decode_parms(&mut self) -> DecodeParms<'_> {
+    pub fn decode_parms(&mut self) -> DecodeParms<'_, W> {
         self.insert(Name(b"DecodeParms")).start()
     }
 }
 
-impl Drop for Stream<'_> {
+impl<W: Write + ?Sized> Drop for Stream<'_, W> {
     fn drop(&mut self) {
         let dict_len = self.dict.len as usize;
         self.dict.output.limits_mut().register_dict_entries(dict_len);
@@ -1156,7 +1160,7 @@ impl Drop for Stream<'_> {
     }
 }
 
-deref!('a, Stream<'a> => Dict<'a>, dict);
+deref!('a, W,Stream<'a, W> => Dict<'a, W>, dict);
 
 /// A compression filter for a stream.
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]
@@ -1206,14 +1210,14 @@ impl Filter {
 /// Writer for an _filter decode parameters dictionary_.
 ///
 /// This struct is created by [`Stream::decode_parms`].
-pub struct DecodeParms<'a> {
-    dict: Dict<'a>,
+pub struct DecodeParms<'a, W: Write + ?Sized> {
+    dict: Dict<'a, W>,
 }
 
 writer!(DecodeParms: |obj| Self { dict: obj.dict() });
 
 /// Properties for `FlateDecode` and `LzwDecode`.
-impl DecodeParms<'_> {
+impl<W: Write + ?Sized> DecodeParms<'_, W> {
     /// Write the `/Predictor` attribute for `FlateDecode` and `LzwDecode`.
     ///
     /// No predictor is used by default.
@@ -1276,7 +1280,7 @@ impl DecodeParms<'_> {
 }
 
 /// Properties for `CcittFaxDecode`. Also see [`Self::columns`].
-impl DecodeParms<'_> {
+impl<W: Write + ?Sized> DecodeParms<'_, W> {
     /// Write the `/K` attribute for `CcittFaxDecode`.
     ///
     /// Defaults to 0.
@@ -1339,7 +1343,7 @@ impl DecodeParms<'_> {
 }
 
 /// Properties for `Jbig2Decode`.
-impl DecodeParms<'_> {
+impl<W: Write + ?Sized> DecodeParms<'_, W> {
     /// Write the `/JBIG2Globals` attribute for `Jbig2Decode`.
     ///
     /// A reference to a stream containing global segments.
@@ -1350,7 +1354,7 @@ impl DecodeParms<'_> {
 }
 
 /// Properties for `JpxDecode`.
-impl DecodeParms<'_> {
+impl<W: Write + ?Sized> DecodeParms<'_, W> {
     /// Write the `/ColorTransform` attribute for `JpxDecode`.
     ///
     /// How to handle color data. If `true` (1), images with three color
@@ -1365,7 +1369,7 @@ impl DecodeParms<'_> {
 }
 
 /// Properties for `Crypt`.
-impl DecodeParms<'_> {
+impl<W: Write + ?Sized> DecodeParms<'_, W> {
     /// Write the `/Type` attribute for `Crypt` as `CryptFilterDecodeParms`.
     pub fn crypt_type(&mut self) -> &mut Self {
         self.pair(Name(b"Type"), Name(b"CryptFilterDecodeParms"));
@@ -1382,7 +1386,7 @@ impl DecodeParms<'_> {
     }
 }
 
-deref!('a, DecodeParms<'a> => Dict<'a>, dict);
+deref!('a, W,DecodeParms<'a, W> => Dict<'a, W>, dict);
 
 /// Which kind of predictor to use for a `FlateDecode` or `LzwDecode` stream.
 #[derive(Debug, Copy, Clone, Default, Eq, PartialEq, Hash)]
@@ -1427,30 +1431,30 @@ impl Predictor {
 ///
 /// For each node, either the `/Kids` or `/Names` attribute must be set, but
 /// never both.
-pub struct NameTree<'a, T> {
-    dict: Dict<'a>,
+pub struct NameTree<'a, T, W: Write + ?Sized> {
+    dict: Dict<'a, W>,
     phantom: PhantomData<T>,
 }
 
-impl<'a, T> Writer<'a> for NameTree<'a, T> {
-    fn start(obj: Obj<'a>) -> Self {
+impl<'a, T, W: Write + ?Sized> Writer<'a, W> for NameTree<'a, T, W> {
+    fn start(obj: Obj<'a, W>) -> Self {
         Self { dict: obj.dict(), phantom: PhantomData }
     }
 }
 
-impl<'a, T> Rewrite<'a> for NameTree<'_, T> {
-    type Output = NameTree<'a, T>;
+impl<'a, T, W: Write + ?Sized + 'a> Rewrite<'a, W> for NameTree<'_, T, W> {
+    type Output = NameTree<'a, T, W>;
 }
 
-impl<T> NameTree<'_, T> {
+impl<T, W: Write + ?Sized> NameTree<'_, T, W> {
     /// Start writing the `/Kids` attribute with the children of this node.
-    pub fn kids(&mut self) -> TypedArray<'_, Ref> {
+    pub fn kids(&mut self) -> TypedArray<'_, Ref, W> {
         self.dict.insert(Name(b"Kids")).array().typed()
     }
 
     /// Start writing the `/Names` attribute to set the immediate name-to-object
     /// mappings of this node.
-    pub fn names(&mut self) -> NameTreeEntries<'_, T> {
+    pub fn names(&mut self) -> NameTreeEntries<'_, T, W> {
         self.dict.insert(Name(b"Names")).start()
     }
 
@@ -1467,22 +1471,22 @@ impl<T> NameTree<'_, T> {
 /// The children must be added in ascending lexical order. Their minimum and
 /// maximum keys must not exceed the `/Limits` property of the parent [`NameTree`]
 /// node. This struct is created by [`NameTree::names`].
-pub struct NameTreeEntries<'a, T> {
-    arr: Array<'a>,
+pub struct NameTreeEntries<'a, T, W: Write + ?Sized> {
+    arr: Array<'a, W>,
     phantom: PhantomData<T>,
 }
 
-impl<'a, T> Writer<'a> for NameTreeEntries<'a, T> {
-    fn start(obj: Obj<'a>) -> Self {
+impl<'a, T, W: Write + ?Sized> Writer<'a, W> for NameTreeEntries<'a, T, W> {
+    fn start(obj: Obj<'a, W>) -> Self {
         Self { arr: obj.array(), phantom: PhantomData }
     }
 }
 
-impl<'a, T> Rewrite<'a> for NameTreeEntries<'_, T> {
-    type Output = NameTreeEntries<'a, T>;
+impl<'a, T, W: Write + ?Sized + 'a> Rewrite<'a, W> for NameTreeEntries<'_, T, W> {
+    type Output = NameTreeEntries<'a, T, W>;
 }
 
-impl<T> NameTreeEntries<'_, T>
+impl<T, W: Write + ?Sized> NameTreeEntries<'_, T, W>
 where
     T: Primitive,
 {
@@ -1503,30 +1507,30 @@ where
 ///
 /// For each node, either the `/Kids` or `/Nums` attribute must be set, but
 /// never both.
-pub struct NumberTree<'a, T> {
-    dict: Dict<'a>,
+pub struct NumberTree<'a, T, W: Write + ?Sized> {
+    dict: Dict<'a, W>,
     phantom: PhantomData<T>,
 }
 
-impl<'a, T> Writer<'a> for NumberTree<'a, T> {
-    fn start(obj: Obj<'a>) -> Self {
+impl<'a, T, W: Write + ?Sized> Writer<'a, W> for NumberTree<'a, T, W> {
+    fn start(obj: Obj<'a, W>) -> Self {
         Self { dict: obj.dict(), phantom: PhantomData }
     }
 }
 
-impl<'a, T> Rewrite<'a> for NumberTree<'_, T> {
-    type Output = NumberTree<'a, T>;
+impl<'a, T, W: Write + ?Sized + 'a> Rewrite<'a, W> for NumberTree<'_, T, W> {
+    type Output = NumberTree<'a, T, W>;
 }
 
-impl<T> NumberTree<'_, T> {
+impl<T, W: Write + ?Sized> NumberTree<'_, T, W> {
     /// Start writing the `/Kids` attribute with the children of this node.
-    pub fn kids(&mut self) -> TypedArray<'_, Ref> {
+    pub fn kids(&mut self) -> TypedArray<'_, Ref, W> {
         self.dict.insert(Name(b"Kids")).array().typed()
     }
 
     /// Start writing the `/Nums` attribute to set the immediate
     /// number-to-object mappings of this node.
-    pub fn nums(&mut self) -> NumberTreeEntries<'_, T> {
+    pub fn nums(&mut self) -> NumberTreeEntries<'_, T, W> {
         self.dict.insert(Name(b"Nums")).start()
     }
 
@@ -1543,22 +1547,22 @@ impl<T> NumberTree<'_, T> {
 /// The children must be added in ascending order. Their minimum and
 /// maximum keys must not exceed the `/Limits` property of the parent [`NumberTree`]
 /// node. This struct is created by [`NumberTree::nums`].
-pub struct NumberTreeEntries<'a, T> {
-    arr: Array<'a>,
+pub struct NumberTreeEntries<'a, T, W: Write + ?Sized> {
+    arr: Array<'a, W>,
     phantom: PhantomData<T>,
 }
 
-impl<'a, T> Writer<'a> for NumberTreeEntries<'a, T> {
-    fn start(obj: Obj<'a>) -> Self {
+impl<'a, T, W: Write + ?Sized> Writer<'a, W> for NumberTreeEntries<'a, T, W> {
+    fn start(obj: Obj<'a, W>) -> Self {
         Self { arr: obj.array(), phantom: PhantomData }
     }
 }
 
-impl<'a, T> Rewrite<'a> for NumberTreeEntries<'_, T> {
-    type Output = NumberTreeEntries<'a, T>;
+impl<'a, T, W: Write + ?Sized + 'a> Rewrite<'a, W> for NumberTreeEntries<'_, T, W> {
+    type Output = NumberTreeEntries<'a, T, W>;
 }
 
-impl<T> NumberTreeEntries<'_, T>
+impl<T, W: Write + ?Sized> NumberTreeEntries<'_, T, W>
 where
     T: Primitive,
 {

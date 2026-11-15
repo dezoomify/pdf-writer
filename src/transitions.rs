@@ -3,8 +3,8 @@ use super::*;
 /// Writer for a _transition dictionary_.
 ///
 /// This struct is created by [`Page::transition`].
-pub struct Transition<'a> {
-    dict: Dict<'a>,
+pub struct Transition<'a, W: Write + ?Sized> {
+    dict: Dict<'a, W>,
 }
 
 writer!(Transition: |obj| {
@@ -13,7 +13,7 @@ writer!(Transition: |obj| {
     Self { dict }
 });
 
-impl Transition<'_> {
+impl<W: Write + ?Sized> Transition<'_, W> {
     /// Write the `/S` attribute to set the transition style.
     pub fn style(&mut self, kind: TransitionStyle) -> &mut Self {
         self.pair(Name(b"S"), kind.to_name());
@@ -37,7 +37,7 @@ impl Transition<'_> {
     /// Write the `/M` attribute to set the transition direction. Will be
     /// inwards if the argument is `false`.
     pub fn direction(&mut self, outward: bool) -> &mut Self {
-        let name = if outward { Name(b"O") } else { Name(b"I") };
+        let name = if outward { Name(b"W") } else { Name(b"I") };
         self.pair(Name(b"M"), name);
         self
     }
@@ -62,7 +62,7 @@ impl Transition<'_> {
     }
 }
 
-deref!('a, Transition<'a> => Dict<'a>, dict);
+deref!('a, W,Transition<'a, W> => Dict<'a, W>, dict);
 
 /// A kind of page transition.
 #[derive(Debug, Copy, Clone, Default, Eq, PartialEq, Hash)]
@@ -128,7 +128,7 @@ pub enum TransitionAngle {
 }
 
 impl TransitionAngle {
-    fn write_to_obj(&self, obj: Obj<'_>) {
+    fn write_to_obj<W: Write + ?Sized>(&self, obj: Obj<'_, W>) {
         match self {
             Self::LeftToRight => obj.primitive(0),
             Self::BottomToTop => obj.primitive(90),

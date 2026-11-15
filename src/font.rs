@@ -4,8 +4,8 @@ use std::marker::PhantomData;
 /// Writer for a _Type-1 font dictionary_.
 ///
 /// This struct is created by [`Chunk::type1_font`].
-pub struct Type1Font<'a> {
-    dict: Dict<'a>,
+pub struct Type1Font<'a, W: Write + ?Sized> {
+    dict: Dict<'a, W>,
 }
 
 writer!(Type1Font: |obj| {
@@ -15,7 +15,7 @@ writer!(Type1Font: |obj| {
     Self { dict }
 });
 
-impl Type1Font<'_> {
+impl<W: Write + ?Sized> Type1Font<'_, W> {
     /// Write the `/Name` attribute, which is the name of the font in the
     /// current resource dictionary. Required in PDF 1.0, discouraged in PDF
     /// 1.1+.
@@ -73,7 +73,7 @@ impl Type1Font<'_> {
 
     /// Start writing an `/Encoding` dictionary. Either this or
     /// [`encoding_predefined`](Self::encoding_predefined) is required.
-    pub fn encoding_custom(&mut self) -> Encoding<'_> {
+    pub fn encoding_custom(&mut self) -> Encoding<'_, W> {
         self.insert(Name(b"Encoding")).start()
     }
 
@@ -86,13 +86,13 @@ impl Type1Font<'_> {
     }
 }
 
-deref!('a, Type1Font<'a> => Dict<'a>, dict);
+deref!('a, W,Type1Font<'a, W> => Dict<'a, W>, dict);
 
 /// Writer for a _Type-3 font dictionary_.
 ///
 /// This struct is created by [`Chunk::type3_font`].
-pub struct Type3Font<'a> {
-    dict: Dict<'a>,
+pub struct Type3Font<'a, W: Write + ?Sized> {
+    dict: Dict<'a, W>,
 }
 
 writer!(Type3Font: |obj| {
@@ -102,7 +102,7 @@ writer!(Type3Font: |obj| {
     Self { dict }
 });
 
-impl Type3Font<'_> {
+impl<W: Write + ?Sized> Type3Font<'_, W> {
     /// Write the `/Name` attribute, which is the name of the font in the
     /// current resource dictionary. Always required in PDF 1.0, required if
     /// `FontName` is set in child font descriptor.
@@ -130,7 +130,7 @@ impl Type3Font<'_> {
     /// Each glyph's content stream must start with either the
     /// [`d0`](crate::Content::start_color_glyph) or
     /// [`d1`](crate::Content::start_shape_glyph) operator.
-    pub fn char_procs(&mut self) -> TypedDict<'_, Ref> {
+    pub fn char_procs(&mut self) -> TypedDict<'_, Ref, W> {
         self.insert(Name(b"CharProcs")).dict().typed()
     }
 
@@ -143,7 +143,7 @@ impl Type3Font<'_> {
 
     /// Start writing an `/Encoding` dictionary. Either this or
     /// [`encoding_predefined`](Self::encoding_predefined) is required.
-    pub fn encoding_custom(&mut self) -> Encoding<'_> {
+    pub fn encoding_custom(&mut self) -> Encoding<'_, W> {
         self.insert(Name(b"Encoding")).start()
     }
 
@@ -175,7 +175,7 @@ impl Type3Font<'_> {
     }
 
     /// Start writing the `/Resources` dictionary.
-    pub fn resources(&mut self) -> Resources<'_> {
+    pub fn resources(&mut self) -> Resources<'_, W> {
         self.insert(Name(b"Resources")).start()
     }
 
@@ -192,14 +192,14 @@ impl Type3Font<'_> {
     }
 }
 
-deref!('a, Type3Font<'a> => Dict<'a>, dict);
+deref!('a, W,Type3Font<'a, W> => Dict<'a, W>, dict);
 
 /// Writer for a _simple font encoding dictionary_.
 ///
 /// This struct is created by [`Type1Font::encoding_custom`] and
 /// [`Type3Font::encoding_custom`].
-pub struct Encoding<'a> {
-    dict: Dict<'a>,
+pub struct Encoding<'a, W: Write + ?Sized> {
+    dict: Dict<'a, W>,
 }
 
 writer!(Encoding: |obj| {
@@ -208,7 +208,7 @@ writer!(Encoding: |obj| {
     Self { dict }
 });
 
-impl Encoding<'_> {
+impl<W: Write + ?Sized> Encoding<'_, W> {
     /// Write the `BaseEncoding` attribute, from which this encoding is
     /// described through differences.
     pub fn base_encoding(&mut self, name: Name) -> &mut Self {
@@ -217,23 +217,23 @@ impl Encoding<'_> {
     }
 
     /// Start writing the `/Differences` array.
-    pub fn differences(&mut self) -> Differences<'_> {
+    pub fn differences(&mut self) -> Differences<'_, W> {
         self.insert(Name(b"Differences")).start()
     }
 }
 
-deref!('a, Encoding<'a> => Dict<'a>, dict);
+deref!('a, W,Encoding<'a, W> => Dict<'a, W>, dict);
 
 /// Writer for an _encoding differences array_.
 ///
 /// This struct is created by [`Encoding::differences`].
-pub struct Differences<'a> {
-    array: Array<'a>,
+pub struct Differences<'a, W: Write + ?Sized> {
+    array: Array<'a, W>,
 }
 
 writer!(Differences: |obj| Self { array: obj.array() });
 
-impl Differences<'_> {
+impl<W: Write + ?Sized> Differences<'_, W> {
     /// Maps consecutive character codes starting at `start` to the given glyph
     /// names.
     pub fn consecutive<'n>(
@@ -249,13 +249,13 @@ impl Differences<'_> {
     }
 }
 
-deref!('a, Differences<'a> => Array<'a>, array);
+deref!('a, W,Differences<'a, W> => Array<'a, W>, array);
 
 /// Writer for a _Type-0 (composite) font dictionary_. PDF 1.2+.
 ///
 /// This struct is created by [`Chunk::type0_font`].
-pub struct Type0Font<'a> {
-    dict: Dict<'a>,
+pub struct Type0Font<'a, W: Write + ?Sized> {
+    dict: Dict<'a, W>,
 }
 
 writer!(Type0Font: |obj| {
@@ -265,7 +265,7 @@ writer!(Type0Font: |obj| {
     Self { dict }
 });
 
-impl Type0Font<'_> {
+impl<W: Write + ?Sized> Type0Font<'_, W> {
     /// Write the `/BaseFont` attribute. This is the PostScript name of the
     /// font. Required.
     pub fn base_font(&mut self, name: Name) -> &mut Self {
@@ -304,13 +304,13 @@ impl Type0Font<'_> {
     }
 }
 
-deref!('a, Type0Font<'a> => Dict<'a>, dict);
+deref!('a, W,Type0Font<'a, W> => Dict<'a, W>, dict);
 
 /// Writer for a _CID font dictionary_. PDF 1.2+.
 ///
 /// This struct is created by [`Chunk::cid_font`].
-pub struct CidFont<'a> {
-    dict: Dict<'a>,
+pub struct CidFont<'a, W: Write + ?Sized> {
+    dict: Dict<'a, W>,
 }
 
 writer!(CidFont: |obj| {
@@ -319,7 +319,7 @@ writer!(CidFont: |obj| {
     Self { dict }
 });
 
-impl CidFont<'_> {
+impl<W: Write + ?Sized> CidFont<'_, W> {
     /// Write the `/Subtype` attribute. Required.
     pub fn subtype(&mut self, subtype: CidFontType) -> &mut Self {
         self.pair(Name(b"Subtype"), subtype.to_name());
@@ -351,7 +351,7 @@ impl CidFont<'_> {
     }
 
     /// Start writing the `/W` (widths) array.
-    pub fn widths(&mut self) -> Widths<'_> {
+    pub fn widths(&mut self) -> Widths<'_, W> {
         self.insert(Name(b"W")).start()
     }
 
@@ -375,7 +375,7 @@ impl CidFont<'_> {
     }
 }
 
-deref!('a, CidFont<'a> => Dict<'a>, dict);
+deref!('a, W,CidFont<'a, W> => Dict<'a, W>, dict);
 
 /// The subtype of a CID font.
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]
@@ -398,13 +398,13 @@ impl CidFontType {
 /// Writer for a _CID font widths array_.
 ///
 /// This struct is created by [`CidFont::widths`].
-pub struct Widths<'a> {
-    array: Array<'a>,
+pub struct Widths<'a, W: Write + ?Sized> {
+    array: Array<'a, W>,
 }
 
 writer!(Widths: |obj| Self { array: obj.array() });
 
-impl Widths<'_> {
+impl<W: Write + ?Sized> Widths<'_, W> {
     /// Specifies individual widths for a range of consecutive CIDs starting at
     /// `start`.
     pub fn consecutive(
@@ -426,13 +426,13 @@ impl Widths<'_> {
     }
 }
 
-deref!('a, Widths<'a> => Array<'a>, array);
+deref!('a, W,Widths<'a, W> => Array<'a, W>, array);
 
 /// Writer for a _font descriptor dictionary_.
 ///
 /// This struct is created by [`Chunk::font_descriptor`].
-pub struct FontDescriptor<'a> {
-    dict: Dict<'a>,
+pub struct FontDescriptor<'a, W: Write + ?Sized> {
+    dict: Dict<'a, W>,
 }
 
 writer!(FontDescriptor: |obj| {
@@ -441,7 +441,7 @@ writer!(FontDescriptor: |obj| {
     Self { dict }
 });
 
-impl FontDescriptor<'_> {
+impl<W: Write + ?Sized> FontDescriptor<'_, W> {
     /// Write the `/FontName` attribute. Required, except for Type 3 fonts.
     pub fn name(&mut self, name: Name) -> &mut Self {
         self.pair(Name(b"FontName"), name);
@@ -581,7 +581,7 @@ impl FontDescriptor<'_> {
 }
 
 /// Additional `FontDescriptor` attributes for CIDFonts.
-impl FontDescriptor<'_> {
+impl<W: Write + ?Sized> FontDescriptor<'_, W> {
     /// Write the `/Style` attribute. Optional.
     ///
     /// The class and subclass values should be extracted from the
@@ -599,7 +599,7 @@ impl FontDescriptor<'_> {
     /// Start writing the `/FD` attribute. Optional.
     ///
     /// Overrides the global font descriptor for specific glyphs.
-    pub fn descriptor_override(&mut self) -> FontDescriptorOverride<'_> {
+    pub fn descriptor_override(&mut self) -> FontDescriptorOverride<'_, W> {
         self.insert(Name(b"FD")).start()
     }
 
@@ -613,25 +613,25 @@ impl FontDescriptor<'_> {
     }
 }
 
-deref!('a, FontDescriptor<'a> => Dict<'a>, dict);
+deref!('a, W,FontDescriptor<'a, W> => Dict<'a, W>, dict);
 
 /// Writer for a _font descriptor override dictionary_.
 ///
 /// This struct is created by [`FontDescriptor::descriptor_override`].
 ///
 /// The font descriptor dictionaries within can only contain metrics data.
-pub struct FontDescriptorOverride<'a> {
-    dict: Dict<'a>,
+pub struct FontDescriptorOverride<'a, W: Write + ?Sized> {
+    dict: Dict<'a, W>,
 }
 
 writer!(FontDescriptorOverride: |obj| {
     Self { dict: obj.dict() }
 });
 
-impl FontDescriptorOverride<'_> {
+impl<W: Write + ?Sized> FontDescriptorOverride<'_, W> {
     /// Start writing a `FontDescriptor` dictionary for a custom character
     /// class.
-    pub fn custom_class(&mut self, class: Name) -> FontDescriptor<'_> {
+    pub fn custom_class(&mut self, class: Name) -> FontDescriptor<'_, W> {
         self.insert(class).start()
     }
 
@@ -643,7 +643,7 @@ impl FontDescriptorOverride<'_> {
     }
 
     /// Start writing a `FontDescriptor` dictionary for a predefined CJK class.
-    pub fn cjk_class(&mut self, class: CjkClass) -> FontDescriptor<'_> {
+    pub fn cjk_class(&mut self, class: CjkClass) -> FontDescriptor<'_, W> {
         self.insert(class.to_name()).start()
     }
 
@@ -655,7 +655,7 @@ impl FontDescriptorOverride<'_> {
     }
 }
 
-deref!('a, FontDescriptorOverride<'a> => Dict<'a>, dict);
+deref!('a, W,FontDescriptorOverride<'a, W> => Dict<'a, W>, dict);
 
 /// Glyph classes for CJK fonts as defined in ISO 32000-1:2008.
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]
@@ -770,13 +770,13 @@ bitflags::bitflags! {
 /// Writer for a _character map stream_.
 ///
 /// This struct is created by [`Chunk::cmap`].
-pub struct Cmap<'a> {
-    stream: Stream<'a>,
+pub struct Cmap<'a, W: Write + ?Sized> {
+    stream: Stream<'a, W>,
 }
 
-impl<'a> Cmap<'a> {
+impl<'a, W: Write + ?Sized> Cmap<'a, W> {
     /// Create a new character map writer.
-    pub(crate) fn start(mut stream: Stream<'a>) -> Self {
+    pub(crate) fn start(mut stream: Stream<'a, W>) -> Self {
         stream.pair(Name(b"Type"), Name(b"CMap"));
         Self { stream }
     }
@@ -828,7 +828,7 @@ impl<'a> Cmap<'a> {
     }
 }
 
-deref!('a, Cmap<'a> => Stream<'a>, stream);
+deref!('a, W,Cmap<'a, W> => Stream<'a, W>, stream);
 
 /// The writing mode of a character map.
 #[derive(Debug, Copy, Clone, Default, Eq, PartialEq, Hash)]
@@ -849,9 +849,9 @@ impl WMode {
 }
 
 /// A builder for a `/ToUnicode` character map stream.
-#[must_use = "call finish to complete the character map and check for I/O errors"]
+#[must_use = "call finish to complete the character map and check for I/W errors"]
 pub struct UnicodeCmap<W: Write, G = u16> {
-    output: Sink<W>,
+    output: Output<W>,
     mappings: Vec<u8>,
     count: i32,
     glyph_id: PhantomData<G>,
@@ -877,8 +877,8 @@ where
     ) -> Self {
         // https://www.adobe.com/content/dam/acom/en/devnet/font/pdfs/5014.CIDFont_Spec.pdf
 
-        let mut output = Sink::new(writer);
-        let buf = output.as_output();
+        let mut output = Output::new(writer);
+        let buf = &mut output;
 
         // Static header.
         buf.extend(b"%!PS-Adobe-3.0 Resource-CMap\n");
@@ -953,8 +953,8 @@ where
         glyph: G,
         codepoints: impl IntoIterator<Item = char>,
     ) {
-        let mut mappings = Sink::new(&mut self.mappings);
-        let buf = mappings.as_output();
+        let mut mappings = Output::new(&mut self.mappings);
+        let buf = &mut mappings;
         buf.push(b'<');
         glyph.push(buf);
         buf.extend(b"> <");
@@ -991,7 +991,7 @@ where
         self.flush_range();
 
         // End of body.
-        let buf = self.output.as_output();
+        let buf = &mut self.output;
         buf.extend(b"endcmap\n");
         buf.extend(b"CMapName currentdict /CMap defineresource pop\n");
         buf.extend(b"end\n");
@@ -1003,7 +1003,7 @@ where
     }
 
     fn flush_range(&mut self) {
-        let buf = self.output.as_output();
+        let buf = &mut self.output;
         if self.count > 0 {
             buf.push_int(self.count);
             buf.extend(b" beginbfchar\n");
@@ -1029,18 +1029,19 @@ impl GlyphId for u16 {}
 /// Module to seal the `GlyphId` trait.
 mod private {
     use crate::output::Output;
+    use std::io::Write;
 
     pub trait Sealed {
         const MIN: Self;
         const MAX: Self;
-        fn push(self, buf: &mut Output<'_>);
+        fn push<W: Write + ?Sized>(self, buf: &mut Output<W>);
     }
 
     impl Sealed for u8 {
         const MIN: Self = u8::MIN;
         const MAX: Self = u8::MAX;
 
-        fn push(self, buf: &mut Output<'_>) {
+        fn push<W: Write + ?Sized>(self, buf: &mut Output<W>) {
             buf.push_hex(self);
         }
     }
@@ -1049,7 +1050,7 @@ mod private {
         const MIN: Self = u16::MIN;
         const MAX: Self = u16::MAX;
 
-        fn push(self, buf: &mut Output<'_>) {
+        fn push<W: Write + ?Sized>(self, buf: &mut Output<W>) {
             buf.push_hex_u16(self);
         }
     }
@@ -1067,7 +1068,7 @@ pub struct SystemInfo<'a> {
 }
 
 impl SystemInfo<'_> {
-    fn write(&self, obj: Obj<'_>) {
+    fn write<W: Write + ?Sized>(&self, obj: Obj<'_, W>) {
         obj.dict()
             .pair(Name(b"Registry"), self.registry)
             .pair(Name(b"Ordering"), self.ordering)

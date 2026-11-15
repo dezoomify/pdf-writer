@@ -118,6 +118,34 @@ fn buffered_file_matches_memory() {
 }
 
 #[test]
+fn generic_builders_accept_borrowed_trait_objects() {
+    fn nested<W: Write + ?Sized>(obj: pdf_writer::Obj<'_, W>) {
+        let mut arrays = obj.array().typed::<pdf_writer::Array<'_, W>>();
+        arrays.push().item(42);
+        arrays.push().item(Str(b"text"));
+    }
+
+    let mut expected = Pdf::new(Vec::new());
+    nested(expected.indirect(Ref::new(1)));
+
+    let mut bytes = Vec::new();
+    let destination: &mut dyn Write = &mut bytes;
+    let mut pdf = Pdf::new(destination);
+    nested(pdf.indirect(Ref::new(1)));
+    pdf.finish().unwrap();
+    assert_eq!(bytes, expected.finish().unwrap());
+}
+
+#[test]
+fn content_counts_bytes_written_before_an_error() {
+    let mut content = Content::new(Destination::new(4));
+    content.op("customoperator");
+    assert_eq!(content.len(), 4);
+    assert_eq!(content.get_ref().bytes.len(), 4);
+    assert_eq!(content.finish().unwrap_err().kind(), io::ErrorKind::BrokenPipe);
+}
+
+#[test]
 fn reusable_chunks_and_immediate_errors() {
     let mut bytes = Vec::new();
     let mut source = Chunk::new(&mut bytes);

@@ -23,7 +23,7 @@ pub fn renumber<R: Write + AsRef<[u8]>, W: Write>(
         let slice = &bytes[offset as usize..end as usize];
         let Some((gen, slice)) = extract_object(slice) else { continue };
         target.offsets.push((new, target.len()));
-        let output = target.output.as_output();
+        let output = &mut target.output;
         output.push_int(new.get());
         output.push(b' ');
         output.push_int(gen);
@@ -60,9 +60,9 @@ fn extract_object(slice: &[u8]) -> Option<(i32, &[u8])> {
 
 /// Processes the interior of an indirect object and patches all indirect
 /// references.
-fn patch_object(
+fn patch_object<W: Write + ?Sized>(
     slice: &[u8],
-    output: &mut Output<'_>,
+    output: &mut Output<W>,
     mapping: &mut dyn FnMut(Ref) -> Ref,
 ) {
     // Find the next point of interest:
@@ -204,13 +204,9 @@ mod tests {
 
         // Manually write an untidy object.
         c.offsets.push((Ref::new(8), c.len()));
-        c.output
-            .as_output()
-            .extend(b"8  3  obj\n<</Fmt false/Niceness(4 0\nR-)");
-        c.output.as_output().extend(b"/beginobj/endobj%4 0 R\n");
-        c.output
-            .as_output()
-            .extend(b"/Me 8 3  R/Unknown 11 0  R/R[4  0\nR]>>%\n\nendobj");
+        c.output.extend(b"8  3  obj\n<</Fmt false/Niceness(4 0\nR-)");
+        c.output.extend(b"/beginobj/endobj%4 0 R\n");
+        c.output.extend(b"/Me 8 3  R/Unknown 11 0  R/R[4  0\nR]>>%\n\nendobj");
 
         c.stream(Ref::new(17), b"1 0 R 2 0 R 3 0 R 4 0 R")
             .pair(Name(b"Ok"), TextStr(")4 0 R"))
