@@ -55,6 +55,10 @@ view through `AsRef<[u8]>`; file readback is outside the chunk API.
 
 Header options are set at construction using `Pdf::with_options` and `PdfOptions`.
 
+For exports with many objects, `FilePdf` stores the index in a caller-provided
+scratch file and streams the final cross-reference data. Its transactions can
+discard incomplete pages when the destination implements `RollbackWrite`.
+
 For more examples, check out the [examples folder] in the repository.
 
 ## Safety

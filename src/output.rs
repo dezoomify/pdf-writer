@@ -16,6 +16,12 @@ pub struct Sink<W: Write + ?Sized> {
     pub(crate) writer: W,
 }
 
+pub(crate) struct Snapshot {
+    pub(crate) len: u64,
+    last: Option<u8>,
+    limits: Limits,
+}
+
 impl<W: Write> Sink<W> {
     pub(crate) fn new(writer: W) -> Self {
         Self {
@@ -49,6 +55,21 @@ impl<W: Write> Sink<W> {
 }
 
 impl<W: Write + ?Sized> Sink<W> {
+    pub(crate) fn snapshot(&self) -> Snapshot {
+        Snapshot {
+            len: self.len,
+            last: self.last,
+            limits: self.limits.clone(),
+        }
+    }
+
+    pub(crate) fn restore(&mut self, snapshot: Snapshot) {
+        self.len = snapshot.len;
+        self.last = snapshot.last;
+        self.limits = snapshot.limits;
+        self.error = None;
+    }
+
     pub(crate) fn fail(&mut self, error: io::Error) {
         if self.error.is_none() {
             self.error = Some(error);

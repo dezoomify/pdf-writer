@@ -96,6 +96,7 @@ mod attributes;
 mod chunk;
 mod color;
 mod content;
+mod file_pdf;
 mod files;
 mod font;
 mod forms;
@@ -203,6 +204,7 @@ pub mod types {
 
 pub use self::chunk::{Chunk, Settings};
 pub use self::content::Content;
+pub use self::file_pdf::{FilePdf, RollbackWrite};
 pub use self::limits::Limits;
 pub use self::object::{
     Array, Date, Dict, Filter, Finish, LanguageIdentifier, Name, Null, Obj, Primitive,
@@ -524,7 +526,7 @@ impl<W: Write> DerefMut for Pdf<W> {
     }
 }
 
-#[derive(Default)]
+#[derive(Default, Clone)]
 struct TrailerData {
     catalog_id: Option<Ref>,
     info_id: Option<Ref>,
