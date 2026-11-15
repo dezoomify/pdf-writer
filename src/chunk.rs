@@ -64,6 +64,26 @@ impl<W: Write> Chunk<W> {
         &self.output.writer
     }
 
+    /// Get the destination to configure it without writing, seeking, or changing
+    /// its contents. Those operations would invalidate recorded object offsets.
+    pub fn get_mut(&mut self) -> &mut W {
+        &mut self.output.writer
+    }
+
+    /// Report a retained serialization error without consuming the writer.
+    /// Does not flush buffered bytes; use [`flush`](Self::flush) for that.
+    /// The original error remains available from [`finish`](Self::finish).
+    pub fn check(&self) -> io::Result<()> {
+        self.output.check()
+    }
+
+    /// Flush the destination and report serialization or flush errors without
+    /// finalizing the PDF. A flush failure is retained for subsequent calls,
+    /// including [`finish`](Self::finish).
+    pub fn flush(&mut self) -> io::Result<()> {
+        self.output.flush()
+    }
+
     /// Check for serialization errors, flush, and return the destination.
     pub fn finish(self) -> io::Result<W> {
         self.output.finish()

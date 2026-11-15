@@ -182,3 +182,34 @@ fn auxiliary_encoders_report_write_and_flush_errors() {
         );
     }
 }
+
+#[test]
+fn failures_can_be_observed_before_finalization() {
+    let mut pdf = Pdf::new(Destination::new(usize::MAX));
+    pdf.get_mut().remaining = 2;
+    pdf.indirect(Ref::new(1)).dict().pair(Name(b"Value"), 42);
+    assert_eq!(pdf.check().unwrap_err().kind(), io::ErrorKind::BrokenPipe);
+    assert_eq!(pdf.flush().unwrap_err().kind(), io::ErrorKind::BrokenPipe);
+    assert_eq!(pdf.finish().unwrap_err().kind(), io::ErrorKind::BrokenPipe);
+
+    let mut pdf = Pdf::new(Destination::new(usize::MAX));
+    pdf.get_mut().flush_error = true;
+    assert!(pdf.check().is_ok());
+    assert_eq!(pdf.flush().unwrap_err().kind(), io::ErrorKind::PermissionDenied);
+    pdf.get_mut().flush_error = false;
+    assert_eq!(pdf.check().unwrap_err().kind(), io::ErrorKind::PermissionDenied);
+    assert_eq!(pdf.finish().unwrap_err().kind(), io::ErrorKind::PermissionDenied);
+}
+
+#[test]
+fn flushing_does_not_finalize_the_document() {
+    let mut pdf = Pdf::new(Vec::new());
+    pdf.indirect(Ref::new(1)).primitive(42);
+    pdf.flush().unwrap();
+    pdf.indirect(Ref::new(2)).primitive(43);
+    let actual = pdf.finish().unwrap();
+    let mut expected = Pdf::new(Vec::new());
+    expected.indirect(Ref::new(1)).primitive(42);
+    expected.indirect(Ref::new(2)).primitive(43);
+    assert_eq!(actual, expected.finish().unwrap());
+}

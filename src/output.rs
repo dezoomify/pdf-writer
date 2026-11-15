@@ -31,6 +31,14 @@ impl<W: Write> Sink<W> {
         self
     }
 
+    pub(crate) fn flush(&mut self) -> io::Result<()> {
+        self.check()?;
+        if let Err(error) = self.writer.flush() {
+            self.error = Some(error);
+        }
+        self.check()
+    }
+
     pub(crate) fn finish(mut self) -> io::Result<W> {
         if let Some(error) = self.error {
             return Err(error);
