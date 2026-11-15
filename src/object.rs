@@ -108,34 +108,47 @@ impl Sealed for Str<'_> {
         //   also be represented fully in visible ASCII. We also escape
         //   parentheses because they are delimiters.
         // - Hex strings for anything non-ASCII.
-        if self.0.iter().all(|b| b.is_ascii()) {
+        if self.0.is_ascii() {
             output.push(b'(');
 
             let mut balanced = None;
-            for &byte in self.0 {
+            let mut start = 0;
+            // Write unchanged spans together, keeping balanced parentheses intact.
+            for (i, &byte) in self.0.iter().enumerate() {
+                let escape = match byte {
+                    b'(' | b')' => !*balanced
+                        .get_or_insert_with(|| byte != b')' && self.is_balanced()),
+                    b'\\' => true,
+                    b' '..=b'~' => false,
+                    _ => true,
+                };
+                if !escape {
+                    continue;
+                }
+                if start != i {
+                    output.extend(&self.0[start..i]);
+                }
+                start = i + 1;
                 match byte {
-                    b'(' | b')' => {
-                        if !*balanced
-                            .get_or_insert_with(|| byte != b')' && self.is_balanced())
-                        {
-                            output.push(b'\\');
-                        }
-                        output.push(byte);
-                    }
+                    b'(' | b')' => output.extend(&[b'\\', byte]),
                     b'\\' => output.extend(br"\\"),
-                    b' '..=b'~' => output.push(byte),
                     b'\n' => output.extend(br"\n"),
                     b'\r' => output.extend(br"\r"),
                     b'\t' => output.extend(br"\t"),
                     b'\x08' => output.extend(br"\b"),
                     b'\x0c' => output.extend(br"\f"),
                     _ => {
-                        output.push(b'\\');
-                        output.push_octal(byte);
+                        output.extend(&[
+                            b'\\',
+                            b'0' + (byte >> 6),
+                            b'0' + ((byte >> 3) & 7),
+                            b'0' + (byte & 7),
+                        ]);
                     }
                 }
             }
 
+            output.extend(&self.0[start..]);
             output.push(b')');
         } else {
             output.push(b'<');
@@ -1619,6 +1632,7 @@ mod tests {
         test_primitive!(Null, b"null");
 
         // Test strings.
+        test_primitive!(Str(b""), b"()");
         test_primitive!(Str(b"Hello, World!"), b"(Hello, World!)");
         test_primitive!(Str(b"()"), br"(())");
         test_primitive!(Str(b")()"), br"(\)\(\))");
@@ -1630,6 +1644,11 @@ mod tests {
         test_primitive!(Str(b"a\x14b"), br"(a\024b)");
         test_primitive!(Str(b"\xFF\xAA"), b"<FFAA>");
         test_primitive!(Str(b"\x0A\x7F\x1F"), br"(\n\177\037)");
+        test_primitive!(Str(b"\0plain\x01text\x7f"), br"(\000plain\001text\177)");
+        test_primitive!(Str(b"a\nb\rc\td\x08e\x0cf"), br"(a\nb\rc\td\be\ff)");
+        test_primitive!(Str(b"before (nested ()) after"), b"(before (nested ()) after)");
+        test_primitive!(Str(b"before )( after"), br"(before \)\( after)");
+        test_primitive!(Str(b"\\(a)\\"), br"(\\(a)\\)");
 
         // Test text strings.
         test_primitive!(TextStr("Hallo"), b"(Hallo)");

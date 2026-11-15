@@ -57,6 +57,8 @@ fn document<W: Write>(writer: W, pretty: bool, mode: u8) -> io::Result<W> {
         .contents(Ref::new(4))
         .resources();
     pdf.stream(Ref::new(4), b"q Q");
+    pdf.indirect(Ref::new(6))
+        .primitive(Str(b"plain text\nwith escapes\\and unmatched )\0"));
     match mode {
         0 => pdf.finish(),
         1 => pdf.finish_with_xref_stream(Ref::new(5)),

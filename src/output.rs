@@ -124,15 +124,6 @@ impl<W: Write + ?Sized> Output<W> {
         self.push_hex((value >> 8) as u8);
         self.push_hex(value as u8);
     }
-
-    #[inline]
-    pub(crate) fn push_octal(&mut self, value: u8) {
-        self.extend(&[
-            b'0' + (value >> 6),
-            b'0' + ((value >> 3) & 7),
-            b'0' + (value & 7),
-        ]);
-    }
 }
 
 // Formatting cannot fail independently; I/O errors are retained until finish.
