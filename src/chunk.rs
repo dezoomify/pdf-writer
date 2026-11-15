@@ -241,6 +241,26 @@ impl<W: Write> Chunk<W> {
     pub fn stream<'a>(&'a mut self, id: Ref, data: &'a [u8]) -> Stream<'a> {
         Stream::start(self.indirect(id), data)
     }
+
+    /// Write exactly `length` bytes from a reader without buffering the payload.
+    /// Reading begins when the stream builder is dropped or finished. Trailing
+    /// bytes remain unread. Read errors, including premature EOF, are retained
+    /// for [`check`](Self::check) and [`finish`](Self::finish).
+    ///
+    /// Returns an error before writing an object if `length` exceeds `i32::MAX`.
+    /// The caller supplies already encoded bytes and the matching PDF filter.
+    pub fn stream_from<'a>(
+        &'a mut self,
+        id: Ref,
+        reader: &'a mut dyn io::Read,
+        length: u64,
+    ) -> io::Result<Stream<'a>> {
+        let length = i32::try_from(length).map_err(|_| {
+            io::Error::new(io::ErrorKind::InvalidInput, "stream length exceeds i32::MAX")
+        })?;
+        self.check()?;
+        Ok(Stream::from_reader(self.indirect(id), reader, length))
+    }
 }
 
 /// Document structure.

@@ -213,3 +213,53 @@ fn flushing_does_not_finalize_the_document() {
     expected.indirect(Ref::new(2)).primitive(43);
     assert_eq!(actual, expected.finish().unwrap());
 }
+
+#[test]
+fn reader_payloads_match_slices_and_leave_trailing_bytes() {
+    use std::io::{Cursor, Read};
+    let bytes = vec![42; 100_000];
+    let mut expected = Pdf::new(Vec::new());
+    expected
+        .stream(Ref::new(1), &bytes[..90_000])
+        .filter(Filter::FlateDecode);
+    let mut actual = Pdf::new(Destination::new(usize::MAX));
+    let mut reader = Cursor::new(&bytes);
+    actual
+        .stream_from(Ref::new(1), &mut reader, 90_000)
+        .unwrap()
+        .filter(Filter::FlateDecode);
+    assert_eq!(actual.finish().unwrap().bytes, expected.finish().unwrap());
+    let mut rest = Vec::new();
+    reader.read_to_end(&mut rest).unwrap();
+    assert_eq!(rest.len(), 10_000);
+}
+
+#[test]
+fn reader_errors_and_invalid_lengths_are_reported() {
+    use std::io::Read;
+    struct FailingReader(bool);
+    impl Read for FailingReader {
+        fn read(&mut self, _: &mut [u8]) -> io::Result<usize> {
+            if std::mem::take(&mut self.0) {
+                Err(io::ErrorKind::Interrupted.into())
+            } else {
+                Err(io::ErrorKind::PermissionDenied.into())
+            }
+        }
+    }
+    for (mut reader, kind) in [
+        (Box::new(&b"short"[..]) as Box<dyn Read>, io::ErrorKind::UnexpectedEof),
+        (Box::new(FailingReader(true)), io::ErrorKind::PermissionDenied),
+    ] {
+        let mut pdf = Pdf::new(Vec::new());
+        pdf.stream_from(Ref::new(1), &mut reader, 10).unwrap();
+        assert_eq!(pdf.check().unwrap_err().kind(), kind);
+        assert_eq!(pdf.finish().unwrap_err().kind(), kind);
+    }
+    let mut pdf = Pdf::new(Vec::new());
+    let before = pdf.len();
+    assert!(pdf.stream_from(Ref::new(1), &mut io::empty(), u64::MAX).is_err());
+    assert_eq!(pdf.len(), before);
+    pdf.stream_from(Ref::new(1), &mut io::empty(), 0).unwrap();
+    pdf.finish().unwrap();
+}

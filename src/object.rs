@@ -1097,7 +1097,12 @@ impl<'a, T> TypedDict<'a, T> {
 /// Writer for an indirect stream object.
 pub struct Stream<'a> {
     dict: ManuallyDrop<Dict<'a>>,
-    data: &'a [u8],
+    data: StreamData<'a>,
+}
+
+enum StreamData<'a> {
+    Bytes(&'a [u8]),
+    Reader(&'a mut dyn std::io::Read, u64),
 }
 
 impl<'a> Stream<'a> {
@@ -1116,7 +1121,23 @@ impl<'a> Stream<'a> {
             }),
         );
 
-        Self { dict: ManuallyDrop::new(dict), data }
+        Self {
+            dict: ManuallyDrop::new(dict),
+            data: StreamData::Bytes(data),
+        }
+    }
+
+    pub(crate) fn from_reader(
+        obj: Obj<'a>,
+        reader: &'a mut dyn std::io::Read,
+        length: i32,
+    ) -> Self {
+        let mut dict = obj.dict();
+        dict.pair(Name(b"Length"), length);
+        Self {
+            dict: ManuallyDrop::new(dict),
+            data: StreamData::Reader(reader, length as u64),
+        }
     }
 
     /// Write the `/Filter` attribute.
@@ -1146,7 +1167,28 @@ impl Drop for Stream<'_> {
 
         self.dict.output.extend(b">>");
         self.dict.output.extend(b"\nstream\n");
-        self.dict.output.extend(self.data.as_ref());
+        match &mut self.data {
+            StreamData::Bytes(bytes) => self.dict.output.extend(bytes),
+            StreamData::Reader(reader, remaining) => {
+                let mut buffer = [0; 16 * 1024];
+                while *remaining > 0 && !self.dict.output.failed() {
+                    let len = (*remaining).min(buffer.len() as u64) as usize;
+                    match reader.read(&mut buffer[..len]) {
+                        Ok(0) => self
+                            .dict
+                            .output
+                            .fail(std::io::ErrorKind::UnexpectedEof.into()),
+                        Ok(n) => {
+                            self.dict.output.extend(&buffer[..n]);
+                            *remaining -= n as u64;
+                        }
+                        Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {
+                        }
+                        Err(error) => self.dict.output.fail(error),
+                    }
+                }
+            }
+        }
         self.dict.output.extend(b"\nendstream");
         self.dict.output.extend(b"\nendobj\n");
 

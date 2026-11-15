@@ -49,6 +49,12 @@ impl<W: Write> Sink<W> {
 }
 
 impl<W: Write + ?Sized> Sink<W> {
+    pub(crate) fn fail(&mut self, error: io::Error) {
+        if self.error.is_none() {
+            self.error = Some(error);
+        }
+    }
+
     pub(crate) fn failed(&self) -> bool {
         self.error.is_some()
     }
