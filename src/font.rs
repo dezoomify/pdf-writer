@@ -1033,14 +1033,14 @@ mod private {
     pub trait Sealed {
         const MIN: Self;
         const MAX: Self;
-        fn push(self, buf: &mut dyn Output);
+        fn push(self, buf: &mut Output<'_>);
     }
 
     impl Sealed for u8 {
         const MIN: Self = u8::MIN;
         const MAX: Self = u8::MAX;
 
-        fn push(self, buf: &mut dyn Output) {
+        fn push(self, buf: &mut Output<'_>) {
             buf.push_hex(self);
         }
     }
@@ -1049,7 +1049,7 @@ mod private {
         const MIN: Self = u16::MIN;
         const MAX: Self = u16::MAX;
 
-        fn push(self, buf: &mut dyn Output) {
+        fn push(self, buf: &mut Output<'_>) {
             buf.push_hex_u16(self);
         }
     }

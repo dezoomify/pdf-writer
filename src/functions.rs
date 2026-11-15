@@ -346,7 +346,7 @@ impl PostScriptOp<'_> {
         Ok(limits)
     }
 
-    fn write_slice(ops: &[Self], output: &mut dyn Output) {
+    fn write_slice(ops: &[Self], output: &mut Output<'_>) {
         output.push(b'{');
         if ops.len() > 1 {
             output.push(b' ');
@@ -363,7 +363,7 @@ impl PostScriptOp<'_> {
         output.push(b'}');
     }
 
-    fn write(&self, output: &mut dyn Output) {
+    fn write(&self, output: &mut Output<'_>) {
         match *self {
             Self::Real(r) => output.push_decimal(r),
             Self::Integer(i) => output.push_val(i),

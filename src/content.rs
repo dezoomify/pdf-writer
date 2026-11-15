@@ -55,7 +55,7 @@ impl<W: Write> Content<W> {
 ///
 /// This struct is created by [`Content::op`].
 pub struct Operation<'a> {
-    output: &'a mut dyn Output,
+    output: &'a mut Output<'a>,
     op: &'a str,
     first: bool,
     settings: Settings,
@@ -64,7 +64,7 @@ pub struct Operation<'a> {
 impl<'a> Operation<'a> {
     #[inline]
     pub(crate) fn start(
-        output: &'a mut dyn Output,
+        output: &'a mut Output<'a>,
         op: &'a str,
         settings: Settings,
     ) -> Self {

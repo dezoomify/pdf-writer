@@ -451,7 +451,7 @@ pub enum XRefFilter {
     Multiple(Vec<Filter>),
 }
 
-fn finish_trailer(output: &mut dyn Output, xref_offset: u64, pad: &[u8]) {
+fn finish_trailer(output: &mut Output<'_>, xref_offset: u64, pad: &[u8]) {
     output.extend(pad);
     // Write startxref pointing to the xref stream
     output.extend(b"startxref\n");
@@ -595,11 +595,11 @@ impl XRefWriter for XRefStreamWriter {
 }
 
 struct PlainXRefWriter<'a> {
-    output: &'a mut dyn Output,
+    output: &'a mut Output<'a>,
 }
 
 impl<'a> PlainXRefWriter<'a> {
-    fn new(output: &'a mut dyn Output) -> Self {
+    fn new(output: &'a mut Output<'a>) -> Self {
         Self { output }
     }
 }

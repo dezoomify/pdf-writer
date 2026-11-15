@@ -5,7 +5,7 @@
 //! shows how to write multiple things at once using [`Chunk`]s.
 
 use std::fs::File;
-use std::io::{BufWriter, Cursor};
+use std::io::BufWriter;
 
 use pdf_writer::{Chunk, Content, Name, Pdf, Rect, Ref};
 
@@ -22,7 +22,7 @@ fn main() -> std::io::Result<()> {
     // Create a secondary chunk for parallel writing. This will allows us to
     // write stuff while we're also holding a mutable reference to the main
     // writer.
-    let mut secondary = Chunk::new(Cursor::new(Vec::new()));
+    let mut secondary = Chunk::new(Vec::new());
 
     // We'll collect the page IDs here.
     let page_tree_id = alloc.bump();
@@ -81,7 +81,7 @@ fn main() -> std::io::Result<()> {
     }
 
     // Add the ExtG states to the PDF.
-    pdf.extend(&mut secondary);
+    pdf.extend(&secondary)?;
 
     // Write the root of the page tree.
     pdf.pages(page_tree_id)

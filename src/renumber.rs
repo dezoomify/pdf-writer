@@ -1,46 +1,27 @@
-use std::io::{self, Read, Seek, SeekFrom, Write};
+use std::io::Write;
 
 use crate::{output::Output, Chunk, Ref};
 
-/// Renumber a readable chunk into another destination.
-pub fn renumber<R: Write + Read + Seek, W: Write>(
-    source: &mut Chunk<R>,
+/// Renumbers a chunk of objects.
+///
+/// See [`Chunk::renumber`] for more details.
+pub fn renumber<R: Write + AsRef<[u8]>, W: Write>(
+    source: &Chunk<R>,
     target: &mut Chunk<W>,
     mapping: &mut dyn FnMut(Ref) -> Ref,
-) -> io::Result<()> {
-    let len = source.len();
-    let offsets = &source.offsets;
-    target.output.limits_mut().merge(source.limits());
-    source
-        .output
-        .read(|reader| renumber_objects(reader, len, offsets, target, mapping))
-}
+) {
+    target.merge_limits(source.limits());
 
-fn renumber_objects<R: Read + Seek, W: Write>(
-    reader: &mut R,
-    len: u64,
-    offsets: &[(Ref, u64)],
-    target: &mut Chunk<W>,
-    mapping: &mut dyn FnMut(Ref) -> Ref,
-) -> io::Result<()> {
-    let mut scratch = Vec::new();
-    let mut iter = offsets.iter().copied().peekable();
+    let bytes = source.get_ref().as_ref();
+    let mut iter = source.offsets.iter().copied().peekable();
     while let Some((id, offset)) = iter.next() {
         if target.output.failed() {
             break;
         }
         let new = mapping(id);
-        let end = iter.peek().map_or(len, |&(_, offset)| offset);
-        let len = usize::try_from(end - offset).map_err(|_| {
-            io::Error::new(
-                io::ErrorKind::InvalidData,
-                "chunk object is too large to renumber",
-            )
-        })?;
-        scratch.resize(len, 0);
-        reader.seek(SeekFrom::Start(offset))?;
-        reader.read_exact(&mut scratch)?;
-        let Some((gen, slice)) = extract_object(&scratch) else { continue };
+        let end = iter.peek().map_or(bytes.len() as u64, |&(_, offset)| offset);
+        let slice = &bytes[offset as usize..end as usize];
+        let Some((gen, slice)) = extract_object(slice) else { continue };
         target.offsets.push((new, target.len()));
         let output = target.output.as_output();
         output.push_int(new.get());
@@ -49,11 +30,11 @@ fn renumber_objects<R: Read + Seek, W: Write>(
         output.extend(b" obj\n");
         patch_object(slice, output, mapping);
         output.extend(b"\nendobj\n");
+
         if target.settings.pretty {
             output.extend(b"\n");
         }
     }
-    Ok(())
 }
 
 /// Extract the generation number and interior of an indirect object.
@@ -81,7 +62,7 @@ fn extract_object(slice: &[u8]) -> Option<(i32, &[u8])> {
 /// references.
 fn patch_object(
     slice: &[u8],
-    output: &mut dyn Output,
+    output: &mut Output<'_>,
     mapping: &mut dyn FnMut(Ref) -> Ref,
 ) {
     // Find the next point of interest:
@@ -207,7 +188,7 @@ mod tests {
 
     #[test]
     fn test_renumber() {
-        let mut c = Chunk::new(std::io::Cursor::new(Vec::new()));
+        let mut c = Chunk::new(Vec::new());
 
         c.indirect(Ref::new(4))
             .dict()
@@ -237,13 +218,15 @@ mod tests {
 
         let mut alloc = Ref::new(1);
         let mut map = HashMap::new();
-        let r = c.renumber(Vec::new(), |old| {
-            if old == Ref::new(11) {
-                old
-            } else {
-                *map.entry(old).or_insert_with(|| alloc.bump())
-            }
-        });
+        let r = c
+            .renumber(Vec::new(), |old| {
+                if old == Ref::new(11) {
+                    old
+                } else {
+                    *map.entry(old).or_insert_with(|| alloc.bump())
+                }
+            })
+            .unwrap();
 
         test!(
             r.finish().unwrap(),

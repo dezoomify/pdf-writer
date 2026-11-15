@@ -16,7 +16,7 @@ mod sealed {
         const STARTS_WITH_DELIMITER: bool;
 
         /// Serialize the object to the destination.
-        fn write(self, output: &mut dyn Output);
+        fn write(self, output: &mut Output<'_>);
     }
 }
 
@@ -30,7 +30,7 @@ where
     const STARTS_WITH_DELIMITER: bool = T::STARTS_WITH_DELIMITER;
 
     #[inline]
-    fn write(self, output: &mut dyn Output) {
+    fn write(self, output: &mut Output<'_>) {
         (*self).write(output);
     }
 }
@@ -41,7 +41,7 @@ impl Sealed for bool {
     const STARTS_WITH_DELIMITER: bool = false;
 
     #[inline]
-    fn write(self, output: &mut dyn Output) {
+    fn write(self, output: &mut Output<'_>) {
         if self {
             output.extend(b"true");
         } else {
@@ -56,7 +56,7 @@ impl Sealed for i32 {
     const STARTS_WITH_DELIMITER: bool = false;
 
     #[inline]
-    fn write(self, output: &mut dyn Output) {
+    fn write(self, output: &mut Output<'_>) {
         output.push_int(self);
     }
 }
@@ -67,7 +67,7 @@ impl Sealed for f32 {
     const STARTS_WITH_DELIMITER: bool = false;
 
     #[inline]
-    fn write(self, output: &mut dyn Output) {
+    fn write(self, output: &mut Output<'_>) {
         output.push_float(self);
     }
 }
@@ -99,7 +99,7 @@ impl Str<'_> {
 impl Sealed for Str<'_> {
     const STARTS_WITH_DELIMITER: bool = true;
 
-    fn write(self, output: &mut dyn Output) {
+    fn write(self, output: &mut Output<'_>) {
         output.limits_mut().register_str_len(self.0.len());
 
         // We use:
@@ -165,7 +165,7 @@ pub struct TextStr<'a>(pub &'a str);
 impl Sealed for TextStr<'_> {
     const STARTS_WITH_DELIMITER: bool = true;
 
-    fn write(self, output: &mut dyn Output) {
+    fn write(self, output: &mut Output<'_>) {
         output.limits_mut().register_str_len(self.0.len());
 
         // ASCII and PDFDocEncoding match for 32 up to 126.
@@ -253,7 +253,7 @@ pub struct TextStrWithLang<'a, 'b>(pub &'b [(LanguageIdentifier, &'a str)]);
 impl<'a, 'b> Sealed for TextStrWithLang<'a, 'b> {
     const STARTS_WITH_DELIMITER: bool = true;
 
-    fn write(self, output: &mut dyn Output) {
+    fn write(self, output: &mut Output<'_>) {
         let mut len = 0;
 
         for (lang, text) in self.0 {
@@ -281,17 +281,17 @@ impl<'a, 'b> Sealed for TextStrWithLang<'a, 'b> {
 
 impl Primitive for TextStrWithLang<'_, '_> {}
 
-fn write_utf16be_text_str_header(output: &mut dyn Output) {
+fn write_utf16be_text_str_header(output: &mut Output<'_>) {
     output.push(b'<');
     output.push_hex(254);
     output.push_hex(255);
 }
 
-fn write_utf16be_text_str_footer(output: &mut dyn Output) {
+fn write_utf16be_text_str_footer(output: &mut Output<'_>) {
     output.push(b'>');
 }
 
-fn write_utf16be_lang_code(lang: LanguageIdentifier, output: &mut dyn Output) {
+fn write_utf16be_lang_code(lang: LanguageIdentifier, output: &mut Output<'_>) {
     // The escape character U+001B encloses the language tag. It must not
     // otherwise appear in a text string and the spec offers no opportunity to
     // escape it. In the future, `pdf-writer` may offer a constructor for
@@ -327,7 +327,7 @@ pub struct Name<'a>(pub &'a [u8]);
 impl Sealed for Name<'_> {
     const STARTS_WITH_DELIMITER: bool = true;
 
-    fn write(self, output: &mut dyn Output) {
+    fn write(self, output: &mut Output<'_>) {
         output.limits_mut().register_name_len(self.0.len());
 
         output.push(b'/');
@@ -383,7 +383,7 @@ impl Sealed for Null {
     const STARTS_WITH_DELIMITER: bool = false;
 
     #[inline]
-    fn write(self, output: &mut dyn Output) {
+    fn write(self, output: &mut Output<'_>) {
         output.extend(b"null");
     }
 }
@@ -436,7 +436,7 @@ impl Sealed for Ref {
     const STARTS_WITH_DELIMITER: bool = false;
 
     #[inline]
-    fn write(self, output: &mut dyn Output) {
+    fn write(self, output: &mut Output<'_>) {
         output.push_int(self.0.get());
         output.extend(b" 0 R");
     }
@@ -476,7 +476,7 @@ impl Sealed for Rect {
     const STARTS_WITH_DELIMITER: bool = true;
 
     #[inline]
-    fn write(self, output: &mut dyn Output) {
+    fn write(self, output: &mut Output<'_>) {
         output.push(b'[');
         output.push_val(self.x1);
         output.push(b' ');
@@ -594,7 +594,7 @@ impl Date {
 impl Sealed for Date {
     const STARTS_WITH_DELIMITER: bool = true;
 
-    fn write(self, output: &mut dyn Output) {
+    fn write(self, output: &mut Output<'_>) {
         output.extend(b"(D:");
 
         (|| {
@@ -623,7 +623,7 @@ impl Primitive for Date {}
 /// Writer for an arbitrary object.
 #[must_use = "not consuming this leaves the writer in an inconsistent state"]
 pub struct Obj<'a> {
-    output: &'a mut dyn Output,
+    output: &'a mut Output<'a>,
     indirect: bool,
     indent: u8,
     settings: Settings,
@@ -634,7 +634,7 @@ impl<'a> Obj<'a> {
     /// Start a new direct object.
     #[inline]
     pub(crate) fn direct(
-        output: &'a mut dyn Output,
+        output: &'a mut Output<'a>,
         indent: u8,
         settings: Settings,
         needs_padding: bool,
@@ -651,7 +651,7 @@ impl<'a> Obj<'a> {
     /// Start a new indirect object.
     #[inline]
     pub(crate) fn indirect(
-        output: &'a mut dyn Output,
+        output: &'a mut Output<'a>,
         id: Ref,
         settings: Settings,
     ) -> Self {
@@ -753,7 +753,7 @@ pub trait Rewrite<'a> {
 
 /// Writer for an array.
 pub struct Array<'a> {
-    output: &'a mut dyn Output,
+    output: &'a mut Output<'a>,
     indirect: bool,
     indent: u8,
     settings: Settings,
@@ -915,7 +915,7 @@ impl<'a, T> TypedArray<'a, T> {
 
 /// Writer for a dictionary.
 pub struct Dict<'a> {
-    output: &'a mut dyn Output,
+    output: &'a mut Output<'a>,
     indirect: bool,
     indent: u8,
     settings: Settings,

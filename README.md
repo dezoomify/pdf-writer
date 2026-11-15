@@ -47,9 +47,11 @@ For in-memory output, construct `Pdf::new(Vec::new())` and retrieve the bytes wi
 `let bytes = pdf.finish()?`. Buffer capacity belongs to the caller:
 `Pdf::new(Vec::with_capacity(8192))`.
 
-Chunks that will be appended or renumbered need readable, seekable storage, such
-as `Chunk::new(std::io::Cursor::new(Vec::new()))` or a file opened for reading and
-writing. The final PDF destination only requires `Write`.
+Reusable chunks use caller-supplied byte storage: `Chunk::new(Vec::new())`.
+Append with `pdf.extend(&chunk)?`, or renumber with
+`chunk.renumber(Vec::new(), mapping)?`. Both report errors immediately.
+PDF and content destinations only require `Write`. Reusable chunks need a byte
+view through `AsRef<[u8]>`; file readback is outside the chunk API.
 
 Header options are set at construction using `Pdf::with_options` and `PdfOptions`.
 

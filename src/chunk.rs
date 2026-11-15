@@ -1,5 +1,3 @@
-use std::io::{Read, Seek};
-
 use super::*;
 
 /// Settings that should be applied while writing a PDF file.
@@ -26,8 +24,9 @@ impl Default for Settings {
 ///
 /// The destination is supplied by the caller. Use a separate chunk when objects
 /// need to be written while another writer borrows the main PDF. To append or
-/// renumber a chunk, its destination must also implement [`Read`] and [`Seek`],
-/// for example a [`std::io::Cursor<Vec<u8>>`] or a readable file.
+/// renumber a chunk, use byte storage implementing `AsRef<[u8]>`, such as
+/// `Vec<u8>`. Its byte view must contain exactly the bytes written by the chunk.
+/// The caller owns and configures that storage.
 ///
 /// Always call [`finish`](Self::finish), or append the chunk to a PDF, to check
 /// for I/O errors. Destinations must be empty and positioned at their beginning.
@@ -70,35 +69,20 @@ impl<W: Write> Chunk<W> {
         self.output.finish()
     }
 
-    /// Append all objects from another chunk.
+    /// Append objects from a chunk backed by readable byte storage.
     ///
-    /// The source is flushed and read from its beginning. Its position is
-    /// restored so writing to it can continue. Source and destination errors
-    /// are reported by this chunk's [`finish`](Self::finish).
-    pub fn extend<R: Write + Read + Seek>(&mut self, other: &mut Chunk<R>) {
-        if self.output.failed() {
-            return;
-        }
+    /// Returns source or destination errors immediately. A destination failure
+    /// is also retained for [`finish`](Self::finish).
+    pub fn extend<R: Write + AsRef<[u8]>>(&mut self, other: &Chunk<R>) -> io::Result<()> {
+        other.output.check()?;
+        self.output.check()?;
         let base = self.len();
-        let len = other.len();
-        let result = other.output.read(|reader| {
-            reader.rewind()?;
-            let copied = io::copy(&mut reader.take(len), &mut self.output)?;
-            if copied != len {
-                return Err(io::Error::new(
-                    io::ErrorKind::UnexpectedEof,
-                    "chunk destination was truncated",
-                ));
-            }
-            Ok(())
-        });
-        if let Err(error) = result {
-            self.output.fail(error);
-            return;
-        }
-        self.output.limits_mut().merge(other.limits());
+        self.output.extend(other.get_ref().as_ref());
+        self.output.check()?;
+        self.merge_limits(other.limits());
         self.offsets
             .extend(other.offsets.iter().map(|&(id, offset)| (id, base + offset)));
+        Ok(())
     }
 
     /// Iterate over the top-level object references, in serialization order.
@@ -131,52 +115,49 @@ impl<W: Write> Chunk<W> {
     }
 }
 
-impl<R: Write + Read + Seek> Chunk<R> {
+impl<R: Write + AsRef<[u8]>> Chunk<R> {
     /// Renumber objects and references into a new caller-supplied destination.
     ///
     /// `mapping` is called for every occurrence of an ID, including references
     /// to objects outside this chunk. It must return a consistent mapping.
     /// Strings and stream payloads are copied without interpreting their bytes.
-    /// Source and destination errors are reported by the returned chunk's finish.
+    /// Returns source or destination errors immediately.
     ///
     /// ```
-    /// use std::{collections::HashMap, io::Cursor};
+    /// use std::collections::HashMap;
     /// use pdf_writer::{Chunk, Ref};
-    /// let mut chunk = Chunk::new(Cursor::new(Vec::new()));
+    /// let mut chunk = Chunk::new(Vec::new());
     /// chunk.indirect(Ref::new(10)).primitive(true);
     /// let mut alloc = Ref::new(1);
     /// let mut map = HashMap::new();
     /// let renumbered = chunk.renumber(Vec::new(), |old| {
     ///     *map.entry(old).or_insert_with(|| alloc.bump())
-    /// });
+    /// })?;
     /// let bytes = renumbered.finish()?;
     /// # Ok::<_, std::io::Error>(())
     /// ```
     pub fn renumber<W: Write>(
-        &mut self,
+        &self,
         writer: W,
         mapping: impl FnMut(Ref) -> Ref,
-    ) -> Chunk<W> {
+    ) -> io::Result<Chunk<W>> {
         let mut chunk = Chunk::with_settings(writer, self.settings);
-        self.renumber_into(&mut chunk, mapping);
-        chunk
+        self.renumber_into(&mut chunk, mapping)?;
+        Ok(chunk)
     }
 
     /// Renumber into an existing target chunk.
     ///
-    /// Errors are reported by the target chunk's finish. The source's position
-    /// is restored so that writing to it can continue.
+    /// Returns source or destination errors immediately.
     pub fn renumber_into<W: Write>(
-        &mut self,
+        &self,
         target: &mut Chunk<W>,
         mut mapping: impl FnMut(Ref) -> Ref,
-    ) {
-        if target.output.failed() {
-            return;
-        }
-        if let Err(error) = crate::renumber::renumber(self, target, &mut mapping) {
-            target.output.fail(error);
-        }
+    ) -> io::Result<()> {
+        self.output.check()?;
+        target.output.check()?;
+        crate::renumber::renumber(self, target, &mut mapping);
+        target.output.check()
     }
 }
 
@@ -500,11 +481,11 @@ mod tests {
     fn test_chunk() {
         let mut w = Pdf::new(Vec::new());
         let mut font = w.type3_font(Ref::new(1));
-        let mut c = Chunk::new(std::io::Cursor::new(Vec::new()));
+        let mut c = Chunk::new(Vec::new());
         c.font_descriptor(Ref::new(2)).name(Name(b"MyFont"));
         font.font_descriptor(Ref::new(2));
         font.finish();
-        w.extend(&mut c);
+        w.extend(&c).unwrap();
         test!(
             w.finish().unwrap(),
             b"%PDF-1.7\n%\x80\x80\x80\x80\n",
