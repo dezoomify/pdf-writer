@@ -3,7 +3,7 @@ use std::io::{self, BufWriter, Cursor, Write};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use pdf_writer::{FilePdf, Ref, RollbackWrite};
+use pdf_writer::{FilePdf, Pdf, Ref, RollbackWrite};
 
 struct Files(PathBuf);
 
@@ -235,4 +235,85 @@ fn unreadable_index_is_terminal_and_buffered_files_match_memory() {
         std::fs::read(files.0.join("output.pdf")).unwrap(),
         expected.finish(Ref::new(10)).unwrap()
     );
+}
+
+fn finish<W: Write>(pdf: Pdf<W>, stream: bool) -> io::Result<W> {
+    if stream {
+        pdf.finish_with_xref_stream(Ref::new(30))
+    } else {
+        pdf.finish()
+    }
+}
+
+#[test]
+fn memory_index_transactions_restore_references_limits_and_trailer() {
+    for stream in [false, true] {
+        let mut pdf = Pdf::new(Cursor::new(Vec::new()));
+        pdf.indirect(Ref::new(20)).primitive(42);
+        let limits = pdf.limits().clone();
+        pdf.begin_transaction().unwrap();
+        assert!(pdf.begin_transaction().is_err());
+        pdf.catalog(Ref::new(1)).pages(Ref::new(2));
+        pdf.document_info(Ref::new(21))
+            .title(pdf_writer::TextStr("discarded"));
+        pdf.indirect(Ref::new(22)).primitive(100_000);
+        pdf.set_file_id((vec![1], vec![2]));
+        pdf.rollback_transaction().unwrap();
+        assert_eq!(pdf.limits(), &limits);
+        pdf.begin_transaction().unwrap();
+        pdf.indirect(Ref::new(1)).primitive(43);
+        pdf.commit_transaction().unwrap();
+        let actual = finish(pdf, stream).unwrap().into_inner();
+        let mut expected = Pdf::new(Vec::new());
+        expected.indirect(Ref::new(20)).primitive(42);
+        expected.indirect(Ref::new(1)).primitive(43);
+        assert_eq!(actual, finish(expected, stream).unwrap());
+    }
+}
+
+#[test]
+fn buffered_transaction_failure_can_be_retried_after_rollback() {
+    for fail_rollback in [false, true] {
+        let writer = Destination {
+            bytes: Cursor::new(Vec::new()),
+            remaining: usize::MAX,
+            fail_rollback,
+        };
+        let mut pdf = Pdf::new(BufWriter::new(writer));
+        pdf.indirect(Ref::new(1)).primitive(42);
+        pdf.begin_transaction().unwrap();
+        pdf.indirect(Ref::new(2)).primitive(43);
+        pdf.get_mut().get_mut().remaining = 5;
+        assert!(pdf.commit_transaction().is_err());
+        pdf.get_mut().get_mut().remaining = usize::MAX;
+        let rollback = pdf.rollback_transaction();
+        if fail_rollback {
+            assert!(rollback.is_err());
+            assert!(pdf.finish().is_err());
+        } else {
+            rollback.unwrap();
+            pdf.indirect(Ref::new(2)).primitive(44);
+            let actual = pdf.finish().unwrap().into_parts().0.bytes.into_inner();
+            let mut expected = Pdf::new(Vec::new());
+            expected.indirect(Ref::new(1)).primitive(42);
+            expected.indirect(Ref::new(2)).primitive(44);
+            assert_eq!(actual, expected.finish().unwrap());
+        }
+    }
+}
+
+#[test]
+fn every_finalization_mode_rejects_active_transactions() {
+    for mode in 0..3 {
+        let mut pdf = Pdf::new(Vec::new());
+        pdf.begin_transaction().unwrap();
+        let result = match mode {
+            0 => pdf.finish(),
+            1 => pdf.finish_with_xref_stream(Ref::new(1)),
+            _ => pdf.finish_with_xref_stream_and_filter(Ref::new(1), |_| {
+                panic!("active transaction")
+            }),
+        };
+        assert!(result.is_err());
+    }
 }

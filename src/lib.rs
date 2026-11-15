@@ -231,6 +231,13 @@ use self::writers::*;
 pub struct Pdf<W: Write> {
     chunk: Chunk<W>,
     trailer_data: TrailerData,
+    transaction: Option<Transaction>,
+}
+
+struct Transaction {
+    output: output::Snapshot,
+    trailer: TrailerData,
+    offsets: usize,
 }
 
 /// Options applied before the PDF header is written.
@@ -283,7 +290,49 @@ impl<W: Write> Pdf<W> {
         output.extend(b"\n%");
         output.extend(&options.binary_marker);
         output.extend(b"\n\n");
-        Self { chunk, trailer_data: TrailerData::default() }
+        Self {
+            chunk,
+            trailer_data: TrailerData::default(),
+            transaction: None,
+        }
+    }
+
+    /// Begin a transaction at an object boundary. Nested transactions are
+    /// rejected. Buffered output is flushed before the checkpoint is taken.
+    pub fn begin_transaction(&mut self) -> io::Result<()> {
+        if self.transaction.is_some() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "a transaction is already active",
+            ));
+        }
+        self.flush()?;
+        self.transaction = Some(Transaction {
+            output: self.chunk.output.snapshot(),
+            trailer: self.trailer_data.clone(),
+            offsets: self.chunk.offsets.len(),
+        });
+        Ok(())
+    }
+
+    /// Flush and keep the current transaction. Errors leave it active so the
+    /// caller can attempt rollback after resolving a transient failure.
+    pub fn commit_transaction(&mut self) -> io::Result<()> {
+        self.flush()?;
+        self.transaction.take().ok_or_else(|| {
+            io::Error::new(io::ErrorKind::InvalidInput, "no active transaction")
+        })?;
+        Ok(())
+    }
+
+    fn check_transaction(&self) -> io::Result<()> {
+        if self.transaction.is_some() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "cannot finish an active transaction",
+            ));
+        }
+        Ok(())
     }
 
     /// Set the file identifier for the document.
@@ -317,10 +366,13 @@ impl<W: Write> Pdf<W> {
 
     /// Write the cross-reference table and trailer, flush, and return the destination.
     ///
+    /// Requires no active transaction.
+    ///
     /// Returns the first I/O error encountered during serialization or flushing.
     ///
     /// Panics if any indirect reference id was used twice.
     pub fn finish(self) -> io::Result<W> {
+        self.check_transaction()?;
         let Chunk { output: mut sink, offsets, settings } = self.chunk;
         if sink.failed() {
             return sink.finish();
@@ -343,6 +395,8 @@ impl<W: Write> Pdf<W> {
     }
 
     /// Write the cross-reference stream and trailer, flush, and return the destination.
+    ///
+    /// Requires no active transaction.
     ///
     /// Returns the first I/O error encountered during serialization or flushing.
     ///
@@ -392,6 +446,7 @@ impl<W: Write> Pdf<W> {
         xref_id: Ref,
         filter: impl FnOnce(Vec<u8>) -> (Vec<u8>, Option<XRefFilter>),
     ) -> io::Result<W> {
+        self.check_transaction()?;
         let Chunk { output: mut sink, mut offsets, settings } = self.chunk;
         if sink.failed() {
             return sink.finish();
@@ -442,6 +497,26 @@ impl<W: Write> Pdf<W> {
 
         finish_trailer(output, xref_offset, &[]);
         sink.finish()
+    }
+}
+
+impl<W: RollbackWrite> Pdf<W> {
+    /// Discard the transaction's bytes, object references, limits and trailer
+    /// metadata. A successful rollback clears errors from the discarded suffix.
+    /// Resolve transient destination failures before calling this method.
+    /// A failed rollback remains terminal and prevents successful finalization.
+    pub fn rollback_transaction(&mut self) -> io::Result<()> {
+        let transaction = self.transaction.take().ok_or_else(|| {
+            io::Error::new(io::ErrorKind::InvalidInput, "no active transaction")
+        })?;
+        if let Err(error) = self.get_mut().rollback_to(transaction.output.len) {
+            self.chunk.output.fail(error);
+            return self.check();
+        }
+        self.chunk.output.restore(transaction.output);
+        self.chunk.offsets.truncate(transaction.offsets);
+        self.trailer_data = transaction.trailer;
+        Ok(())
     }
 }
 

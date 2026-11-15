@@ -1,7 +1,7 @@
 use std::fs::File;
 use std::io::{self, BufReader, BufWriter, Cursor, Read, Seek, SeekFrom, Write};
 
-use crate::{output::Snapshot, Finish, Name, Pdf, PdfOptions, Ref, TrailerData};
+use crate::{Finish, Name, Pdf, PdfOptions, Ref};
 
 /// A destination that can discard a partially written suffix.
 pub trait RollbackWrite: Write {
@@ -75,8 +75,6 @@ pub struct FilePdf<W: Write> {
 }
 
 struct Transaction {
-    output: Snapshot,
-    trailer: TrailerData,
     count: u64,
     max_id: i32,
 }
@@ -118,8 +116,9 @@ impl<W: Write> FilePdf<W> {
     }
 
     /// Serialize a bounded group of objects, flush, and store their offsets.
-    /// The callback must not replace the PDF or modify its destination's bytes
-    /// outside the object builders. Duplicate IDs and index errors are terminal.
+    /// The callback must not replace the PDF, manage transactions, or modify its
+    /// destination's bytes outside the object builders. Duplicate IDs and index
+    /// errors are terminal.
     pub fn write(&mut self, write: impl FnOnce(&mut Pdf<W>)) -> io::Result<()> {
         self.pdf.check()?;
         write(&mut self.pdf);
@@ -140,20 +139,16 @@ impl<W: Write> FilePdf<W> {
         if self.transaction.is_some() {
             return Err(invalid("a transaction is already active"));
         }
-        self.pdf.flush()?;
-        self.transaction = Some(Transaction {
-            output: self.pdf.chunk.output.snapshot(),
-            trailer: self.pdf.trailer_data.clone(),
-            count: self.index.count,
-            max_id: self.index.max_id,
-        });
+        self.pdf.begin_transaction()?;
+        self.transaction =
+            Some(Transaction { count: self.index.count, max_id: self.index.max_id });
         Ok(())
     }
 
     /// Keep the transaction's objects. An earlier error leaves the transaction
     /// active so the caller can attempt rollback.
     pub fn commit_transaction(&mut self) -> io::Result<()> {
-        self.pdf.check()?;
+        self.pdf.commit_transaction()?;
         self.transaction
             .take()
             .ok_or_else(|| invalid("no active transaction"))?;
@@ -203,18 +198,15 @@ impl<W: RollbackWrite> FilePdf<W> {
             .transaction
             .take()
             .ok_or_else(|| invalid("no active transaction"))?;
-        let result =
-            self.pdf.get_mut().rollback_to(transaction.output.len).and_then(|()| {
-                self.index.rollback(transaction.count, transaction.max_id)
-            });
+        let result = self
+            .index
+            .rollback(transaction.count, transaction.max_id)
+            .and_then(|()| self.pdf.rollback_transaction());
         if let Err(error) = result {
             self.index_failed = true;
             self.pdf.chunk.output.fail(error);
             return self.pdf.check();
         }
-        self.pdf.chunk.output.restore(transaction.output);
-        self.pdf.chunk.offsets.clear();
-        self.pdf.trailer_data = transaction.trailer;
         Ok(())
     }
 }

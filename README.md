@@ -58,6 +58,7 @@ Header options are set at construction using `Pdf::with_options` and `PdfOptions
 For exports with many objects, `FilePdf` stores the index in a caller-provided
 scratch file and streams the final cross-reference data. Its transactions can
 discard incomplete pages when the destination implements `RollbackWrite`.
+The regular `Pdf` supports the same transaction API while keeping offsets in RAM.
 
 For more examples, check out the [examples folder] in the repository.
 
